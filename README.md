@@ -1,3 +1,2 @@
-<video src="SparseAcceleratorScene.mp4" width="320" height="240" controls></video>
+https://github.com/user-attachments/assets/3019f7b6-2875-444a-87e7-b475b4781880
 
-<iframe width="560" height="315" src="SparseAcceleratorScene.mp4" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
