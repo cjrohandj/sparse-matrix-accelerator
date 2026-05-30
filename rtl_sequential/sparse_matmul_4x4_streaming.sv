@@ -58,19 +58,32 @@ module sparse_matmul_4x4_streaming #(
     output logic busy
 );
 
-    typedef enum logic [1:0] {
-        STATE_LOAD,
-        STATE_OUTPUT
-    } state_t;
-
-    state_t state;
     logic [4:0] load_count;
     logic [4:0] output_count;
-    logic signed [DATA_WIDTH-1:0] dense_b [0:3][0:3];
 
-    assign in_ready = (state == STATE_LOAD);
-    assign out_valid = (state == STATE_OUTPUT);
-    assign busy = (state != STATE_LOAD) || (load_count != 5'd0);
+    logic signed [DATA_WIDTH-1:0] dense_b_ping [0:3][0:3];
+    logic signed [DATA_WIDTH-1:0] dense_b_pong [0:3][0:3];
+
+    logic ping_full;
+    logic pong_full;
+
+    logic write_sel;  // 0 = write ping, 1 = write pong
+    logic read_sel;   // 0 = read ping,  1 = read pong
+
+    wire write_ping = (write_sel == 1'b0);
+    wire read_ping  = (read_sel  == 1'b0);
+
+    wire selected_write_full = write_ping ? ping_full : pong_full;
+    wire selected_read_full  = read_ping  ? ping_full : pong_full;
+
+    wire input_fire  = in_valid  && in_ready;
+    wire output_fire = out_valid && out_ready;
+
+    assign in_ready  = !selected_write_full;
+    assign out_valid = selected_read_full;
+
+    assign busy = ping_full || pong_full || (load_count != 5'd0);
+
     assign out_row = output_count[3:2];
     assign out_col = output_count[1:0];
 
@@ -112,59 +125,83 @@ module sparse_matmul_4x4_streaming #(
 
     function automatic logic signed [ACC_WIDTH-1:0] compute_output(
         input logic [1:0] row,
-        input logic [1:0] col
+        input logic [1:0] col,
+        input logic       use_ping
     );
         logic signed [(2*DATA_WIDTH)-1:0] product0;
         logic signed [(2*DATA_WIDTH)-1:0] product1;
         begin
-            product0 = row_weight0(row) * dense_b[row_index0(row)][col];
-            product1 = row_weight1(row) * dense_b[row_index1(row)][col];
+            if (use_ping) begin
+                product0 = row_weight0(row) * dense_b_ping[row_index0(row)][col];
+                product1 = row_weight1(row) * dense_b_ping[row_index1(row)][col];
+            end else begin
+                product0 = row_weight0(row) * dense_b_pong[row_index0(row)][col];
+                product1 = row_weight1(row) * dense_b_pong[row_index1(row)][col];
+            end
+
             compute_output = product0 + product1;
         end
     endfunction
 
     always_comb begin
-        out_data = compute_output(out_row, out_col);
+        out_data = compute_output(out_row, out_col, read_ping);
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state <= STATE_LOAD;
-            load_count <= 5'd0;
+            load_count   <= 5'd0;
             output_count <= 5'd0;
+
+            ping_full <= 1'b0;
+            pong_full <= 1'b0;
+
+            write_sel <= 1'b0;  // start by loading ping
+            read_sel  <= 1'b0;  // start by reading ping
         end else begin
-            case (state)
-                STATE_LOAD: begin
-                    if (in_valid && in_ready) begin
-                        dense_b[load_count[3:2]][load_count[1:0]] <= in_data;
-                        if (load_count == 5'd15) begin
-                            load_count <= 5'd0;
-                            output_count <= 5'd0;
-                            state <= STATE_OUTPUT;
-                        end else begin
-                            load_count <= load_count + 5'd1;
-                        end
-                    end
+
+            // -------------------------
+            // Input side: fill ping/pong
+            // -------------------------
+            if (input_fire) begin
+                if (write_ping) begin
+                    dense_b_ping[load_count[3:2]][load_count[1:0]] <= in_data;
+                end else begin
+                    dense_b_pong[load_count[3:2]][load_count[1:0]] <= in_data;
                 end
 
-                STATE_OUTPUT: begin
-                    if (out_valid && out_ready) begin
-                        if (output_count == 5'd15) begin
-                            output_count <= 5'd0;
-                            state <= STATE_LOAD;
-                        end else begin
-                            output_count <= output_count + 5'd1;
-                        end
-                    end
-                end
-
-                default: begin
-                    state <= STATE_LOAD;
+                if (load_count == 5'd15) begin
                     load_count <= 5'd0;
-                    output_count <= 5'd0;
+
+                    if (write_ping) begin
+                        ping_full <= 1'b1;
+                    end else begin
+                        pong_full <= 1'b1;
+                    end
+
+                    write_sel <= ~write_sel;
+                end else begin
+                    load_count <= load_count + 5'd1;
                 end
-            endcase
+            end
+
+            // -------------------------
+            // Output side: drain ping/pong
+            // -------------------------
+            if (output_fire) begin
+                if (output_count == 5'd15) begin
+                    output_count <= 5'd0;
+
+                    if (read_ping) begin
+                        ping_full <= 1'b0;
+                    end else begin
+                        pong_full <= 1'b0;
+                    end
+
+                    read_sel <= ~read_sel;
+                end else begin
+                    output_count <= output_count + 5'd1;
+                end
+            end
         end
     end
-
 endmodule

@@ -97,3 +97,9 @@ iverilog -g2012 -Wall -o /private/tmp/de10_uart_tb.vvp \
 
 vvp /private/tmp/de10_uart_tb.vvp
 ```
+
+## Host Script
+
+After programming the FPGA, use `host/send_matrix_uart.py` to send a matrix
+from the computer and print the returned result. See `host/README.md` for
+examples.

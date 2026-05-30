@@ -1,0 +1,53 @@
+# DE10-Lite assignments for rtl_board/de10_lite_uart_top.sv
+#
+# Copy these lines into your Quartus project's .qsf, or use:
+#   Assignments -> Import Assignments...
+#
+# USB-UART wiring for JP1:
+#   adapter TXD -> JP1 pin 1  / GPIO[0] / PIN_V10 / uart_rx
+#   adapter RXD -> JP1 pin 2  / GPIO[1] / PIN_W10 / uart_tx
+#   adapter GND -> JP1 pin 12 or 30
+
+set_global_assignment -name FAMILY "MAX 10"
+set_global_assignment -name DEVICE 10M50DAF484C7G
+set_global_assignment -name TOP_LEVEL_ENTITY de10_lite_uart_top
+
+set_global_assignment -name SYSTEMVERILOG_FILE rtl_board/de10_lite_uart_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl_board/matrix_uart_controller.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl_board/uart_rx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl_board/uart_tx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl_sequential/sparse_matmul_4x4_streaming.sv
+
+set_location_assignment PIN_P11 -to MAX10_CLK1_50
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to MAX10_CLK1_50
+
+set_location_assignment PIN_B8 -to KEY[0]
+set_location_assignment PIN_A7 -to KEY[1]
+set_instance_assignment -name IO_STANDARD "3.3 V SCHMITT TRIGGER" -to KEY[0]
+set_instance_assignment -name IO_STANDARD "3.3 V SCHMITT TRIGGER" -to KEY[1]
+
+set_location_assignment PIN_A8 -to LEDR[0]
+set_location_assignment PIN_A9 -to LEDR[1]
+set_location_assignment PIN_A10 -to LEDR[2]
+set_location_assignment PIN_B10 -to LEDR[3]
+set_location_assignment PIN_D13 -to LEDR[4]
+set_location_assignment PIN_C13 -to LEDR[5]
+set_location_assignment PIN_E14 -to LEDR[6]
+set_location_assignment PIN_D14 -to LEDR[7]
+set_location_assignment PIN_A11 -to LEDR[8]
+set_location_assignment PIN_B11 -to LEDR[9]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[8]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[9]
+
+set_location_assignment PIN_V10 -to uart_rx
+set_location_assignment PIN_W10 -to uart_tx
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart_rx
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart_tx
