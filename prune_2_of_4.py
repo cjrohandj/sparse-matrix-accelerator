@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import argparse
+import ast
+import shlex
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Sequence
 
 Number = int | float
 Matrix = List[List[Number]]
+
+DEFAULT_SERIAL_PORT = "/dev/tty.usbserial-XXXX"
+DEFAULT_N = 4
 
 
 @dataclass(frozen=True)
@@ -74,13 +82,90 @@ def format_matrix(matrix: Iterable[Iterable[Number]]) -> str:
     return "\n".join(" ".join(f"{value:>6}" for value in row) for row in matrix)
 
 
-def main() -> None:
-    dense_weights = [
+def _parse_matrix_text(text: str) -> Matrix:
+    try:
+        return _as_matrix(ast.literal_eval(text.strip()), "weights")
+    except (SyntaxError, ValueError) as literal_error:
+        rows: Matrix = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                rows.append([ast.literal_eval(part) for part in stripped.replace(",", " ").split()])
+            except (SyntaxError, ValueError) as row_error:
+                raise ValueError(
+                    "weights must be a Python-style matrix literal or whitespace-separated rows"
+                ) from row_error
+
+        if rows:
+            return _as_matrix(rows, "weights")
+        raise ValueError("weights input is empty") from literal_error
+
+
+def _load_weights(args: argparse.Namespace) -> Matrix:
+    if args.matrix is not None:
+        return _parse_matrix_text(args.matrix)
+    if args.file is not None:
+        return _parse_matrix_text(args.file.read_text(encoding="utf-8"))
+    if not sys.stdin.isatty():
+        stdin_text = sys.stdin.read()
+        if stdin_text.strip():
+            return _parse_matrix_text(stdin_text)
+
+    return [
         [3, -1, 0, 2],
         [4, 5, -2, 1],
         [0, -7, 6, 2],
         [8, 1, -3, 4],
     ]
+
+
+def build_send_weights_command(
+    sparse_weights: Sparse2Of4,
+    n_value: int,
+    serial_port: str,
+) -> str:
+    values_arg = shlex.quote(repr(sparse_weights.values))
+    indices_arg = shlex.quote(repr(sparse_weights.indices))
+    port_arg = shlex.quote(serial_port)
+
+    return (
+        f"SERIAL_PORT={port_arg}\n"
+        "python3 host/send_weights_uart.py "
+        '--port "$SERIAL_PORT" '
+        f"--n {n_value} "
+        f"--values {values_arg} "
+        f"--indices {indices_arg}"
+    )
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Prune an MxK dense weight matrix into 2:4 format and print a UART upload command."
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--matrix", help="MxK matrix as a Python/JSON literal")
+    source.add_argument("--file", type=Path, help="file containing an MxK matrix")
+
+    parser.add_argument("--n", type=int, default=DEFAULT_N, help="runtime dense/output column count N")
+    parser.add_argument(
+        "--serial-port",
+        default=DEFAULT_SERIAL_PORT,
+        help="serial port path to bake into the printed copy-paste command",
+    )
+    parser.add_argument(
+        "--no-command",
+        action="store_true",
+        help="print only sparse/pruned data, without the copy-paste UART command",
+    )
+
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    dense_weights = _load_weights(args)
 
     sparse_weights, pruned_weights = prune_2_of_4(dense_weights)
 
@@ -88,6 +173,9 @@ def main() -> None:
     print("Sparse indices:", sparse_weights.indices)
     print("\nPruned weights:")
     print(format_matrix(pruned_weights))
+    if not args.no_command:
+        print("\nCopy-paste command to configure FPGA weights:")
+        print(build_send_weights_command(sparse_weights, args.n, args.serial_port))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 # DE10-Lite USB-UART Wrapper
 
-This folder contains a board-level UART path for sending one dense 4x4 matrix
-from a computer to the FPGA and reading the 4x4 sparse matmul result back.
+This folder contains a board-level UART path for configuring an MxK 2:4 sparse
+A matrix, queuing dense KxN B matrices from a computer to the FPGA, and
+reading each MxN result back.
 
 Data path:
 
@@ -21,18 +22,80 @@ Host to FPGA:
 
 ```text
 0xAA
-16 signed int16 values, row-major, little-endian
+K*N signed int16 values, column-major, little-endian:
+  for n in range(N):
+    for k in range(K):
+      send B[k][n]
+```
+
+Dense matrix acknowledgment from FPGA to host:
+
+```text
+0xAC accepted into the waiting room
+0xEE rejected because the waiting room was full when the packet started
+```
+
+Runtime sparse A config from host to FPGA:
+
+```text
+0xA0
+M uint8, where M <= M_MAX
+K uint8, where K is a multiple of 4 and K <= MAX_K
+N uint8, where N <= N_MAX
+M*(K/4) sparse row/group records, each containing:
+  weight0 int16, little-endian
+  weight1 int16, little-endian
+  index0 uint8
+  index1 uint8
+```
+
+Config acknowledgment from FPGA to host:
+
+```text
+0x5A
 ```
 
 FPGA to host:
 
 ```text
 0x55
-16 signed int64 values, row-major, little-endian
+M uint8
+N uint8
+M*N tagged entries:
+  row uint8
+  col uint8
+  value signed int64, little-endian
 ```
 
-The hardware core produces 33-bit signed results for the default 16-bit input
-width. The UART wrapper sign-extends each result to 64 bits before sending it.
+The default top-level capacity is `M_MAX=4`, `MAX_K=16`, and `N_MAX=4`.
+The hardware core widens its accumulator for the configured maximum K, and the
+UART wrapper sign-extends each result to 64 bits before sending it.
+
+The dense matrix waiting room is a value FIFO in `matrix_uart_controller.sv`
+with enough space for `MATRIX_FIFO_DEPTH` maximum-size KxN activation matrices.
+The UART side ACKs a dense packet as soon as it reserves a waiting-room slot,
+then pushes each int16 value toward `sparse_matmul_4x4_streaming` whenever the
+core's `in_ready` signal is high. Runtime sparse weight config packets are only
+accepted while the waiting room and result path are idle, so all queued dense
+matrices use the currently configured K and weights.
+
+The core accumulates one dense B column at a time. After each complete K-value
+column arrives, it immediately emits that C column as tagged `(row, col, value)`
+entries. Host software reconstructs the normal row-major MxN result from those
+tags, so the packet no longer depends on an internal tile order.
+
+`SPARSE_GROUPS_PER_CYCLE` is retained as a top-level compatibility parameter.
+In this immediate-output core, B values arrive as 4-wide sparse groups within a
+single output column, and the core updates the active column accumulators as
+each group arrives:
+
+```text
+K=4   -> first C column can emit after 4 B values
+K=8   -> first C column can emit after 8 B values
+K=16  -> first C column can emit after 16 B values
+```
+
+The board-level latency is still usually dominated by UART byte time.
 
 ## Quartus Files
 
@@ -100,6 +163,6 @@ vvp /private/tmp/de10_uart_tb.vvp
 
 ## Host Script
 
-After programming the FPGA, use `host/send_matrix_uart.py` to send a matrix
-from the computer and print the returned result. See `host/README.md` for
-examples.
+After programming the FPGA, use `host/send_weights_uart.py` to configure
+runtime sparse A weights and `host/send_matrix_uart.py` to send dense B
+matrices. See `host/README.md` for examples.

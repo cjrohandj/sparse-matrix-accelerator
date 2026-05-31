@@ -12,9 +12,12 @@ module tb_de10_lite_uart_top;
 
     logic [7:0] rx_byte;
     logic signed [63:0] result_word;
-    logic signed [63:0] expected [0:15];
 
     de10_lite_uart_top #(
+        .M_MAX(4),
+        .N_MAX(5),
+        .N_TILE(4),
+        .SPARSE_GROUPS_PER_CYCLE(2),
         .CLKS_PER_BIT(CLKS_PER_BIT)
     ) dut (
         .MAX10_CLK1_50(clk),
@@ -68,24 +71,105 @@ module tb_de10_lite_uart_top;
         end
     endtask
 
-    initial begin
-        expected[0] = 64'sd29;
-        expected[1] = 64'sd34;
-        expected[2] = 64'sd39;
-        expected[3] = 64'sd44;
-        expected[4] = 64'sd29;
-        expected[5] = 64'sd38;
-        expected[6] = 64'sd47;
-        expected[7] = 64'sd56;
-        expected[8] = 64'sd19;
-        expected[9] = 64'sd18;
-        expected[10] = 64'sd17;
-        expected[11] = 64'sd16;
-        expected[12] = 64'sd60;
-        expected[13] = 64'sd72;
-        expected[14] = 64'sd84;
-        expected[15] = 64'sd96;
+    task automatic send_i16(input logic signed [15:0] value);
+        begin
+            send_uart_byte(value[7:0]);
+            send_uart_byte(value[15:8]);
+        end
+    endtask
 
+    task automatic send_sparse_row(
+        input logic signed [15:0] weight0,
+        input logic signed [15:0] weight1,
+        input logic [1:0] index0,
+        input logic [1:0] index1
+    );
+        begin
+            send_i16(weight0);
+            send_i16(weight1);
+            send_uart_byte({6'd0, index0});
+            send_uart_byte({6'd0, index1});
+        end
+    endtask
+
+    task automatic send_dense_packet_one;
+        begin
+            send_uart_byte(8'hAA);
+            for (int col = 0; col < 5; col++) begin
+                for (int row = 0; row < 4; row++) begin
+                    send_i16((row * 5) + col + 1);
+                end
+            end
+        end
+    endtask
+
+    task automatic send_dense_packet_two;
+        logic signed [15:0] value;
+        begin
+            send_uart_byte(8'hAA);
+            for (int col = 0; col < 5; col++) begin
+                for (int row = 0; row < 4; row++) begin
+                    value = ((row * 5) + col + 1) * 2;
+                    send_i16(value);
+                end
+            end
+        end
+    endtask
+
+    task automatic expect_single_byte(
+        input logic [7:0] expected_byte,
+        input string label
+    );
+        begin
+            read_uart_byte(rx_byte);
+            if (rx_byte !== expected_byte) begin
+                $error("expected %s byte 0x%02h, got 0x%02h", label, expected_byte, rx_byte);
+            end
+        end
+    endtask
+
+    task automatic expect_one_result(input int result_scale);
+        int expected_value;
+        begin
+            expect_single_byte(8'h55, "response start");
+            expect_single_byte(8'd3, "response M");
+            expect_single_byte(8'd5, "response N");
+
+            for (int col = 0; col < 5; col++) begin
+                for (int row = 0; row < 3; row++) begin
+                    read_uart_byte(rx_byte);
+                    if (rx_byte !== row[7:0]) begin
+                        $error("result scale %0d expected row %0d, got %0d", result_scale, row, rx_byte);
+                    end
+
+                    read_uart_byte(rx_byte);
+                    if (rx_byte !== col[7:0]) begin
+                        $error("result scale %0d expected col %0d, got %0d", result_scale, col, rx_byte);
+                    end
+
+                    result_word = 64'sd0;
+                    for (int byte_index = 0; byte_index < 8; byte_index++) begin
+                        read_uart_byte(rx_byte);
+                        result_word[(byte_index * 8) +: 8] = rx_byte;
+                    end
+
+                    expected_value = ((row * 5) + col + 1) * result_scale;
+                    if (result_word !== expected_value) begin
+                        $error(
+                            "result scale %0d [%0d][%0d] expected %0d, got %0d",
+                            result_scale,
+                            row,
+                            col,
+                            expected_value,
+                            result_word
+                        );
+                    end
+                end
+            end
+        end
+    endtask
+
+    initial begin
         clk = 1'b0;
         key = 2'b00;
         uart_rx = 1'b1;
@@ -94,35 +178,36 @@ module tb_de10_lite_uart_top;
         key = 2'b11;
         wait_bit_times(2);
 
-        send_uart_byte(8'hAA);
-        for (int i = 1; i <= 16; i++) begin
-            send_uart_byte(i[7:0]);
-            send_uart_byte(8'h00);
-        end
+        // Configure sparse A as 3x4. It selects B rows 0, 1, and 2, while N=5
+        // makes the core step across two internal N tiles.
+        send_uart_byte(8'hA0);
+        send_uart_byte(8'd3);
+        send_uart_byte(8'd4);
+        send_uart_byte(8'd5);
+        send_sparse_row(16'sd1, 16'sd0, 2'd0, 2'd1);
+        send_sparse_row(16'sd1, 16'sd0, 2'd1, 2'd0);
+        send_sparse_row(16'sd1, 16'sd0, 2'd2, 2'd0);
 
-        read_uart_byte(rx_byte);
-        if (rx_byte !== 8'h55) begin
-            $error("expected response start byte 0x55, got 0x%02h", rx_byte);
-        end
+        expect_single_byte(8'h5A, "config ack");
 
-        for (int word_index = 0; word_index < 16; word_index++) begin
-            result_word = 64'sd0;
-            for (int byte_index = 0; byte_index < 8; byte_index++) begin
-                read_uart_byte(rx_byte);
-                result_word[(byte_index * 8) +: 8] = rx_byte;
+        // Send two Kx5 dense matrices while the receiver watches the TX line.
+        // A real host UART buffers received bytes even while the PC is writing,
+        // so the testbench must model that full-duplex behavior explicitly.
+        fork
+            begin
+                expect_single_byte(8'hAC, "matrix queue ack");
+                expect_one_result(1);
+                expect_single_byte(8'hAC, "matrix queue ack");
+                expect_one_result(2);
             end
 
-            if (result_word !== expected[word_index]) begin
-                $error(
-                    "result[%0d] expected %0d, got %0d",
-                    word_index,
-                    expected[word_index],
-                    result_word
-                );
+            begin
+                send_dense_packet_one();
+                send_dense_packet_two();
             end
-        end
+        join
 
-        $display("PASS: DE10-Lite UART top streams one matrix through the accelerator");
+        $display("PASS: DE10-Lite UART top streams immediate tagged MxN results");
         $finish;
     end
 

@@ -17,8 +17,15 @@
 
 module de10_lite_uart_top #(
     parameter int DATA_WIDTH = 16,
-    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + 1,
+    parameter int M_MAX = 4,
+    parameter int MAX_K = 16,
+    parameter int N_MAX = 4,
+    parameter int M_TILE = 4,
+    parameter int N_TILE = 4,
+    parameter int SPARSE_GROUPS_PER_CYCLE = 1,
+    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(2 * (MAX_K / 4)) + 1,
     parameter int CLKS_PER_BIT = 434,
+    parameter int RESULT_START_IDLE_CYCLES = 1,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT0 = 16'sd3,
     parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT1 = 16'sd2,
@@ -64,15 +71,26 @@ module de10_lite_uart_top #(
     logic signed [DATA_WIDTH-1:0] core_in_data;
     logic core_in_valid;
     logic core_in_ready;
+    logic core_config_valid;
+    logic [7:0] core_config_m;
+    logic [7:0] core_config_k;
+    logic [7:0] core_config_n;
+    logic [7:0] core_config_row;
+    logic [7:0] core_config_group;
+    logic signed [DATA_WIDTH-1:0] core_config_weight0;
+    logic signed [DATA_WIDTH-1:0] core_config_weight1;
+    logic [1:0] core_config_index0;
+    logic [1:0] core_config_index1;
     logic signed [ACC_WIDTH-1:0] core_out_data;
-    logic [1:0] core_out_row;
-    logic [1:0] core_out_col;
+    logic [7:0] core_out_row;
+    logic [7:0] core_out_col;
     logic core_out_valid;
     logic core_out_ready;
     logic core_busy;
 
     logic controller_busy;
     logic matrix_loaded_pulse;
+    logic config_loaded_pulse;
     logic result_sent_pulse;
     logic [3:0] controller_state;
 
@@ -114,29 +132,53 @@ module de10_lite_uart_top #(
 
     matrix_uart_controller #(
         .DATA_WIDTH(DATA_WIDTH),
-        .ACC_WIDTH(ACC_WIDTH)
+        .M_MAX(M_MAX),
+        .MAX_K(MAX_K),
+        .N_MAX(N_MAX),
+        .ACC_WIDTH(ACC_WIDTH),
+        .RESULT_START_IDLE_CYCLES(RESULT_START_IDLE_CYCLES)
     ) controller_inst (
         .clk(clk),
         .rst_n(rst_n),
         .rx_data(rx_data),
         .rx_data_valid(rx_data_valid),
+        .rx_busy(rx_busy),
         .tx_data(tx_data),
         .tx_start(tx_start),
         .tx_busy(tx_busy),
         .core_in_data(core_in_data),
         .core_in_valid(core_in_valid),
         .core_in_ready(core_in_ready),
+        .core_config_valid(core_config_valid),
+        .core_config_m(core_config_m),
+        .core_config_k(core_config_k),
+        .core_config_n(core_config_n),
+        .core_config_row(core_config_row),
+        .core_config_group(core_config_group),
+        .core_config_weight0(core_config_weight0),
+        .core_config_weight1(core_config_weight1),
+        .core_config_index0(core_config_index0),
+        .core_config_index1(core_config_index1),
         .core_out_data(core_out_data),
+        .core_out_row(core_out_row),
+        .core_out_col(core_out_col),
         .core_out_valid(core_out_valid),
         .core_out_ready(core_out_ready),
         .busy(controller_busy),
         .matrix_loaded_pulse(matrix_loaded_pulse),
+        .config_loaded_pulse(config_loaded_pulse),
         .result_sent_pulse(result_sent_pulse),
         .debug_state(controller_state)
     );
 
     sparse_matmul_4x4_streaming #(
         .DATA_WIDTH(DATA_WIDTH),
+        .M_MAX(M_MAX),
+        .MAX_K(MAX_K),
+        .N_MAX(N_MAX),
+        .M_TILE(M_TILE),
+        .N_TILE(N_TILE),
+        .SPARSE_GROUPS_PER_CYCLE(SPARSE_GROUPS_PER_CYCLE),
         .ACC_WIDTH(ACC_WIDTH),
         .ROW0_WEIGHT0(ROW0_WEIGHT0),
         .ROW0_WEIGHT1(ROW0_WEIGHT1),
@@ -160,6 +202,16 @@ module de10_lite_uart_top #(
         .in_data(core_in_data),
         .in_valid(core_in_valid),
         .in_ready(core_in_ready),
+        .config_valid(core_config_valid),
+        .config_m(core_config_m),
+        .config_k(core_config_k),
+        .config_n(core_config_n),
+        .config_row(core_config_row),
+        .config_group(core_config_group),
+        .config_weight0(core_config_weight0),
+        .config_weight1(core_config_weight1),
+        .config_index0(core_config_index0),
+        .config_index1(core_config_index1),
         .out_data(core_out_data),
         .out_row(core_out_row),
         .out_col(core_out_col),
