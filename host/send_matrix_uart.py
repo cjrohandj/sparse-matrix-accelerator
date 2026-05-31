@@ -638,6 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  min latency:  {min_latency_s * 1e3:.3f} ms")
         print(f"  max latency:  {max_latency_s * 1e3:.3f} ms")
         print(f"  throughput:   {throughput:.3f} matrices/s")
+        results_to_print: MatrixSequence = [result]
     elif matrices is not None:
         queued_results = transact_sequence(
             args.port,
@@ -646,7 +647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             matrices,
         )
         print(f"\nQueued activation matrices accepted: {len(queued_results)}")
-        result = queued_results[-1]
+        results_to_print = queued_results
     elif args.queued is not None:
         if args.queued <= 0:
             raise SystemExit("--queued N requires N >= 1")
@@ -659,12 +660,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.queued,
         )
         print(f"\nQueued transactions accepted: {len(queued_results)}")
-        result = queued_results[-1]
+        results_to_print = queued_results
     else:
-        result = transact(args.port, args.baud, args.timeout, matrix)
+        results_to_print = [transact(args.port, args.baud, args.timeout, matrix)]
 
-    print("\nOutput matrix C:")
-    print(format_matrix(result))
+    if len(results_to_print) == 1:
+        print("\nOutput matrix C:")
+        print(format_matrix(results_to_print[0]))
+    else:
+        print("\nOutput matrices C:")
+        for result_index, result_matrix in enumerate(results_to_print):
+            print(f"\nC[{result_index}]:")
+            print(format_matrix(result_matrix))
     return 0
 
 
