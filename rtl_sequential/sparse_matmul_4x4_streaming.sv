@@ -73,6 +73,9 @@ module sparse_matmul_4x4_streaming #(
     localparam int N_WIDTH = $clog2(N_MAX + 1);
     localparam int K_WIDTH = $clog2(MAX_K + 1);
     localparam int GROUP_WIDTH = (MAX_GROUPS <= 1) ? 1 : $clog2(MAX_GROUPS);
+    localparam int GROUPS_PER_CYCLE =
+        (SPARSE_GROUPS_PER_CYCLE < 1) ? 1 :
+        ((SPARSE_GROUPS_PER_CYCLE > MAX_GROUPS) ? MAX_GROUPS : SPARSE_GROUPS_PER_CYCLE);
 
     logic signed [DATA_WIDTH-1:0] weight0 [0:M_MAX-1][0:MAX_GROUPS-1];
     logic signed [DATA_WIDTH-1:0] weight1 [0:M_MAX-1][0:MAX_GROUPS-1];
@@ -86,8 +89,10 @@ module sparse_matmul_4x4_streaming #(
 
     logic [K_WIDTH-1:0] load_k;
     logic [N_WIDTH-1:0] load_col;
-    logic signed [DATA_WIDTH-1:0] group_values [0:3];
+    logic signed [DATA_WIDTH-1:0] dense_column [0:MAX_K-1];
     logic signed [ACC_WIDTH-1:0] column_acc [0:M_MAX-1];
+    logic compute_active;
+    logic [GROUP_WIDTH:0] compute_group_base;
 
     logic output_active;
     logic [M_WIDTH-1:0] output_row_index;
@@ -98,18 +103,15 @@ module sparse_matmul_4x4_streaming #(
 
     wire input_fire  = in_valid && in_ready;
     wire output_fire = out_valid && out_ready;
-    wire [1:0] load_lane = load_k[1:0];
-    wire [GROUP_WIDTH-1:0] load_group = load_k[GROUP_WIDTH+1:2];
-    wire at_last_group_value = (load_k == (active_k - K_WIDTH'(1)));
     wire at_last_output_row = (output_row_index == (active_m - M_WIDTH'(1)));
     wire at_last_output_col = (load_col == (active_n - N_WIDTH'(1)));
 
-    assign in_ready = !output_active && !output_valid_reg;
+    assign in_ready = !compute_active && !output_active && !output_valid_reg;
     assign out_valid = output_valid_reg;
     assign out_data = output_data_reg;
     assign out_row = output_row_reg;
     assign out_col = output_col_reg;
-    assign busy = (load_k != '0) || (load_col != '0) || output_active || output_valid_reg;
+    assign busy = (load_k != '0) || (load_col != '0) || compute_active || output_active || output_valid_reg;
 
     function automatic logic dims_valid(
         input logic [7:0] m_value,
@@ -179,6 +181,8 @@ module sparse_matmul_4x4_streaming #(
 
             load_k <= '0;
             load_col <= '0;
+            compute_active <= 1'b0;
+            compute_group_base <= '0;
             output_active <= 1'b0;
             output_row_index <= '0;
             output_data_reg <= '0;
@@ -186,8 +190,8 @@ module sparse_matmul_4x4_streaming #(
             output_col_reg <= 8'd0;
             output_valid_reg <= 1'b0;
 
-            for (int lane = 0; lane < 4; lane++) begin
-                group_values[lane] <= '0;
+            for (int k_idx = 0; k_idx < MAX_K; k_idx++) begin
+                dense_column[k_idx] <= '0;
             end
 
             for (int row = 0; row < M_MAX; row++) begin
@@ -265,44 +269,65 @@ module sparse_matmul_4x4_streaming #(
                 end
             end
 
-            if (input_fire) begin
-                group_values[load_lane] <= in_data;
+            if (compute_active) begin
+                logic signed [ACC_WIDTH-1:0] first_row_acc;
+                first_row_acc = column_acc[0];
 
-                if (load_lane == 2'd3) begin
-                    for (int row = 0; row < M_MAX; row++) begin
-                        if (row < active_m) begin
-                            column_acc[row] <=
-                                column_acc[row] +
-                                group_contribution(
-                                    M_WIDTH'(row),
-                                    load_group,
-                                    group_values[0],
-                                    group_values[1],
-                                    group_values[2],
-                                    in_data
-                                );
+                for (int row = 0; row < M_MAX; row++) begin
+                    logic signed [ACC_WIDTH-1:0] row_acc_next;
+                    row_acc_next = column_acc[row];
+
+                    if (row < active_m) begin
+                        for (int lane = 0; lane < GROUPS_PER_CYCLE; lane++) begin
+                            logic [GROUP_WIDTH:0] group_index_ext;
+                            logic [GROUP_WIDTH-1:0] group_index;
+                            group_index_ext = compute_group_base + (GROUP_WIDTH+1)'(lane);
+
+                            if (group_index_ext < active_groups) begin
+                                group_index = group_index_ext[GROUP_WIDTH-1:0];
+                                row_acc_next =
+                                    row_acc_next +
+                                    group_contribution(
+                                        M_WIDTH'(row),
+                                        group_index,
+                                        dense_column[{group_index, 2'd0}],
+                                        dense_column[{group_index, 2'd1}],
+                                        dense_column[{group_index, 2'd2}],
+                                        dense_column[{group_index, 2'd3}]
+                                    );
+                            end
                         end
                     end
 
-                    if (at_last_group_value) begin
-                        output_active <= 1'b1;
-                        output_valid_reg <= 1'b1;
-                        output_row_index <= '0;
-                        output_data_reg <=
-                            column_acc[0] +
-                            group_contribution(
-                                '0,
-                                load_group,
-                                group_values[0],
-                                group_values[1],
-                                group_values[2],
-                                in_data
-                            );
-                        output_row_reg <= 8'd0;
-                        output_col_reg <= {{(8-N_WIDTH){1'b0}}, load_col};
-                        load_k <= '0;
-                    end else begin
-                        load_k <= load_k + K_WIDTH'(1);
+                    column_acc[row] <= row_acc_next;
+                    if (row == 0) begin
+                        first_row_acc = row_acc_next;
+                    end
+                end
+
+                if ((compute_group_base + (GROUP_WIDTH+1)'(GROUPS_PER_CYCLE)) >= active_groups) begin
+                    compute_active <= 1'b0;
+                    compute_group_base <= '0;
+                    output_active <= 1'b1;
+                    output_valid_reg <= 1'b1;
+                    output_row_index <= '0;
+                    output_data_reg <= first_row_acc;
+                    output_row_reg <= 8'd0;
+                    output_col_reg <= {{(8-N_WIDTH){1'b0}}, load_col};
+                end else begin
+                    compute_group_base <= compute_group_base + (GROUP_WIDTH+1)'(GROUPS_PER_CYCLE);
+                end
+            end
+
+            if (input_fire) begin
+                dense_column[load_k] <= in_data;
+
+                if (load_k == (active_k - K_WIDTH'(1))) begin
+                    load_k <= '0;
+                    compute_active <= 1'b1;
+                    compute_group_base <= '0;
+                    for (int row = 0; row < M_MAX; row++) begin
+                        column_acc[row] <= '0;
                     end
                 end else begin
                     load_k <= load_k + K_WIDTH'(1);

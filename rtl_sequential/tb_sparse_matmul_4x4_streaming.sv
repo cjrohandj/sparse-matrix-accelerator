@@ -43,6 +43,7 @@ module tb_sparse_matmul_4x4_streaming;
         .DATA_WIDTH(DATA_WIDTH),
         .M_MAX(M_MAX),
         .N_MAX(N_MAX),
+        .SPARSE_GROUPS_PER_CYCLE(2),
         .ACC_WIDTH(ACC_WIDTH)
     ) dut (
         .clk(clk),
