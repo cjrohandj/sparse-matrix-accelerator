@@ -2,7 +2,7 @@
 
 module tb_sparse_matmul_4x4;
     localparam int DATA_WIDTH = 16;
-    localparam int ACC_WIDTH = (2 * DATA_WIDTH) + 1;
+    localparam int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(4) + 1;
 
     logic signed [(16*DATA_WIDTH)-1:0] dense_b;
     logic signed [(16*ACC_WIDTH)-1:0] result_c;
@@ -57,27 +57,27 @@ module tb_sparse_matmul_4x4;
 
         #1;
 
-        expect_c(0, 0, 33'sd29);
-        expect_c(0, 1, 33'sd34);
-        expect_c(0, 2, 33'sd39);
-        expect_c(0, 3, 33'sd44);
+        expect_c(0, 0, 35'sd24);
+        expect_c(0, 1, 35'sd28);
+        expect_c(0, 2, 35'sd32);
+        expect_c(0, 3, 35'sd36);
 
-        expect_c(1, 0, 33'sd29);
-        expect_c(1, 1, 33'sd38);
-        expect_c(1, 2, 33'sd47);
-        expect_c(1, 3, 33'sd56);
+        expect_c(1, 0, 35'sd24);
+        expect_c(1, 1, 35'sd32);
+        expect_c(1, 2, 35'sd40);
+        expect_c(1, 3, 35'sd48);
 
-        expect_c(2, 0, 33'sd19);
-        expect_c(2, 1, 33'sd18);
-        expect_c(2, 2, 33'sd17);
-        expect_c(2, 3, 33'sd16);
+        expect_c(2, 0, 35'sd45);
+        expect_c(2, 1, 35'sd46);
+        expect_c(2, 2, 35'sd47);
+        expect_c(2, 3, 35'sd48);
 
-        expect_c(3, 0, 33'sd60);
-        expect_c(3, 1, 33'sd72);
-        expect_c(3, 2, 33'sd84);
-        expect_c(3, 3, 33'sd96);
+        expect_c(3, 0, 35'sd38);
+        expect_c(3, 1, 35'sd48);
+        expect_c(3, 2, 35'sd58);
+        expect_c(3, 3, 35'sd68);
 
-        $display("PASS: sparse_matmul_4x4 matches Python reference output");
+        $display("PASS: dense 4x4 matmul matches Python reference output");
         $finish;
     end
 endmodule

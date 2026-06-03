@@ -1,6 +1,6 @@
 # DE10-Lite USB-UART Wrapper
 
-This folder contains a board-level UART path for configuring an MxK 2:4 sparse
+This folder contains a board-level UART path for configuring an MxK dense
 A matrix, queuing dense KxN B matrices from a computer to the FPGA, and
 reading each MxN result back.
 
@@ -35,18 +35,18 @@ Dense matrix acknowledgment from FPGA to host:
 0xEE rejected because the waiting room was full when the packet started
 ```
 
-Runtime sparse A config from host to FPGA:
+Runtime dense A config from host to FPGA:
 
 ```text
 0xA0
 M uint8, where M <= M_MAX
 K uint8, where K is a multiple of 4 and K <= MAX_K
 N uint8, where N <= N_MAX
-M*(K/4) sparse row/group records, each containing:
+M*(K/4) dense row/group records, each containing:
   weight0 int16, little-endian
   weight1 int16, little-endian
-  index0 uint8
-  index1 uint8
+  weight2 int16, little-endian
+  weight3 int16, little-endian
 ```
 
 Config acknowledgment from FPGA to host:
@@ -75,17 +75,22 @@ The dense matrix waiting room is a value FIFO in `matrix_uart_controller.sv`
 with enough space for `MATRIX_FIFO_DEPTH` maximum-size KxN activation matrices.
 The UART side ACKs a dense packet as soon as it reserves a waiting-room slot,
 then pushes each int16 value toward `sparse_matmul_4x4_streaming` whenever the
-core's `in_ready` signal is high. Runtime sparse weight config packets are only
+core's `in_ready` signal is high. Runtime dense weight config packets are only
 accepted while the waiting room and result path are idle, so all queued dense
 matrices use the currently configured K and weights.
+
+Core outputs are buffered by a separate result FIFO in
+`matrix_uart_controller.sv`, so the math core can hand off tagged results as
+soon as queue space is available while `uart_tx` drains those entries in the
+background.
 
 The core accumulates one dense B column at a time. After each complete K-value
 column arrives, it immediately emits that C column as tagged `(row, col, value)`
 entries. Host software reconstructs the normal row-major MxN result from those
 tags, so the packet no longer depends on an internal tile order.
 
-`SPARSE_GROUPS_PER_CYCLE` is retained as a top-level compatibility parameter.
-In this immediate-output core, B values arrive as 4-wide sparse groups within a
+`GROUPS_PER_CYCLE_CFG` sets how many 4-wide dense groups are consumed per cycle.
+In this immediate-output core, B values arrive as 4-wide dense groups within a
 single output column, and the core updates the active column accumulators as
 each group arrives:
 
@@ -140,7 +145,7 @@ LEDR[0]   reset released
 LEDR[1]   packet/controller busy
 LEDR[2]   received UART byte pulse
 LEDR[3]   UART TX busy
-LEDR[4]   sparse core busy
+LEDR[4]   dense core busy
 LEDR[8:5] controller state
 LEDR[9]   UART framing error pulse
 ```
@@ -164,5 +169,5 @@ vvp /private/tmp/de10_uart_tb.vvp
 ## Host Script
 
 After programming the FPGA, use `host/send_weights_uart.py` to configure
-runtime sparse A weights and `host/send_matrix_uart.py` to send dense B
+runtime dense A weights and `host/send_matrix_uart.py` to send dense B
 matrices. See `host/README.md` for examples.

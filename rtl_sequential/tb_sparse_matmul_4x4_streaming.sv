@@ -5,7 +5,7 @@ module tb_sparse_matmul_4x4_streaming;
     localparam int MAX_K = 16;
     localparam int M_MAX = 4;
     localparam int N_MAX = 5;
-    localparam int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(2 * (MAX_K / 4)) + 1;
+    localparam int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(MAX_K) + 1;
 
     logic clk;
     logic rst_n;
@@ -18,8 +18,8 @@ module tb_sparse_matmul_4x4_streaming;
     logic [7:0] config_row;
     logic signed [DATA_WIDTH-1:0] config_weight0;
     logic signed [DATA_WIDTH-1:0] config_weight1;
-    logic [1:0] config_index0;
-    logic [1:0] config_index1;
+    logic signed [DATA_WIDTH-1:0] config_weight2;
+    logic signed [DATA_WIDTH-1:0] config_weight3;
 
     logic signed [ACC_WIDTH-1:0] out_data;
     logic [7:0] out_row;
@@ -43,7 +43,7 @@ module tb_sparse_matmul_4x4_streaming;
         .DATA_WIDTH(DATA_WIDTH),
         .M_MAX(M_MAX),
         .N_MAX(N_MAX),
-        .SPARSE_GROUPS_PER_CYCLE(2),
+        .GROUPS_PER_CYCLE_CFG(2),
         .ACC_WIDTH(ACC_WIDTH)
     ) dut (
         .clk(clk),
@@ -61,8 +61,8 @@ module tb_sparse_matmul_4x4_streaming;
         .config_group(8'd0),
         .config_weight0(config_weight0),
         .config_weight1(config_weight1),
-        .config_index0(config_index0),
-        .config_index1(config_index1),
+        .config_weight2(config_weight2),
+        .config_weight3(config_weight3),
 
         .out_data(out_data),
         .out_row(out_row),
@@ -94,16 +94,16 @@ module tb_sparse_matmul_4x4_streaming;
         input logic [7:0] row,
         input logic signed [DATA_WIDTH-1:0] weight0,
         input logic signed [DATA_WIDTH-1:0] weight1,
-        input logic [1:0] index0,
-        input logic [1:0] index1
+        input logic signed [DATA_WIDTH-1:0] weight2,
+        input logic signed [DATA_WIDTH-1:0] weight3
     );
         begin
             @(negedge clk);
             config_row = row;
             config_weight0 = weight0;
             config_weight1 = weight1;
-            config_index0 = index0;
-            config_index1 = index1;
+            config_weight2 = weight2;
+            config_weight3 = weight3;
             config_valid = 1'b1;
             @(posedge clk);
             @(negedge clk);
@@ -153,21 +153,21 @@ module tb_sparse_matmul_4x4_streaming;
         dense_input_0[18] = 16'sd19;
         dense_input_0[19] = 16'sd20;
 
-        expected_output_0[0]  = 33'sd1;
-        expected_output_0[1]  = 33'sd6;
-        expected_output_0[2]  = 33'sd11;
-        expected_output_0[3]  = 33'sd2;
-        expected_output_0[4]  = 33'sd7;
-        expected_output_0[5]  = 33'sd12;
-        expected_output_0[6]  = 33'sd3;
-        expected_output_0[7]  = 33'sd8;
-        expected_output_0[8]  = 33'sd13;
-        expected_output_0[9]  = 33'sd4;
-        expected_output_0[10] = 33'sd9;
-        expected_output_0[11] = 33'sd14;
-        expected_output_0[12] = 33'sd5;
-        expected_output_0[13] = 33'sd10;
-        expected_output_0[14] = 33'sd15;
+        expected_output_0[0]  = 37'sd13;
+        expected_output_0[1]  = 37'sd39;
+        expected_output_0[2]  = 37'sd75;
+        expected_output_0[3]  = 37'sd16;
+        expected_output_0[4]  = 37'sd43;
+        expected_output_0[5]  = 37'sd80;
+        expected_output_0[6]  = 37'sd19;
+        expected_output_0[7]  = 37'sd47;
+        expected_output_0[8]  = 37'sd85;
+        expected_output_0[9]  = 37'sd22;
+        expected_output_0[10] = 37'sd51;
+        expected_output_0[11] = 37'sd90;
+        expected_output_0[12] = 37'sd25;
+        expected_output_0[13] = 37'sd55;
+        expected_output_0[14] = 37'sd95;
 
         for (int col = 0; col < 5; col++) begin
             for (int row = 0; row < 3; row++) begin
@@ -194,8 +194,8 @@ module tb_sparse_matmul_4x4_streaming;
         config_row = 8'd0;
         config_weight0 = '0;
         config_weight1 = '0;
-        config_index0 = 2'd0;
-        config_index1 = 2'd0;
+        config_weight2 = '0;
+        config_weight3 = '0;
         out_ready = 1'b1;
         output_index = 0;
         input_count = 0;
@@ -204,9 +204,9 @@ module tb_sparse_matmul_4x4_streaming;
         rst_n <= 1'b1;
         @(posedge clk);
 
-        configure_row(8'd0, 16'sd1, 16'sd0, 2'd0, 2'd1);
-        configure_row(8'd1, 16'sd1, 16'sd0, 2'd1, 2'd0);
-        configure_row(8'd2, 16'sd1, 16'sd0, 2'd2, 2'd0);
+        configure_row(8'd0, 16'sd1, 16'sd2, 16'sd0, 16'sd0);
+        configure_row(8'd1, 16'sd0, 16'sd1, 16'sd3, 16'sd0);
+        configure_row(8'd2, 16'sd0, 16'sd0, 16'sd1, 16'sd4);
 
         fork
             begin
@@ -235,7 +235,7 @@ module tb_sparse_matmul_4x4_streaming;
         disable fork;
 
         @(posedge clk);
-        $display("PASS: runtime M/N sparse_matmul_4x4 streams immediate output columns");
+        $display("PASS: runtime M/N dense matmul streams immediate output columns");
         $finish;
     end
 

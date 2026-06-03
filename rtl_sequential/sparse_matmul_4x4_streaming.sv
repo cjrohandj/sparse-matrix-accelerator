@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// Streaming MxK 2:4 structured sparse by KxN dense matmul.
+// Streaming MxK dense by KxN dense matmul.
 //
 // Dense B input is expected in column-major order:
 //
@@ -18,28 +18,28 @@ module sparse_matmul_4x4_streaming #(
     parameter int N_MAX = 4,
     parameter int M_TILE = 4,
     parameter int N_TILE = 4,
-    parameter int SPARSE_GROUPS_PER_CYCLE = 1,
-    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(2 * (MAX_K / 4)) + 1,
+    parameter int GROUPS_PER_CYCLE_CFG = 1,
+    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(MAX_K) + 1,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT0 = 16'sd3,
-    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT1 = 16'sd2,
-    parameter logic [1:0] ROW0_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW0_INDEX1 = 2'd3,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT1 = -16'sd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT2 = 16'sd0,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT3 = 16'sd2,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT0 = 16'sd4,
     parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT1 = 16'sd5,
-    parameter logic [1:0] ROW1_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW1_INDEX1 = 2'd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT2 = -16'sd2,
+    parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT3 = 16'sd1,
 
-    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT0 = -16'sd7,
-    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT1 = 16'sd6,
-    parameter logic [1:0] ROW2_INDEX0 = 2'd1,
-    parameter logic [1:0] ROW2_INDEX1 = 2'd2,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT0 = 16'sd0,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT1 = -16'sd7,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT2 = 16'sd6,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT3 = 16'sd2,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT0 = 16'sd8,
-    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT1 = 16'sd4,
-    parameter logic [1:0] ROW3_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW3_INDEX1 = 2'd3
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT1 = 16'sd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT2 = -16'sd3,
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT3 = 16'sd4
 ) (
     input  logic clk,
     input  logic rst_n,
@@ -56,8 +56,8 @@ module sparse_matmul_4x4_streaming #(
     input  logic [7:0]                   config_group,
     input  logic signed [DATA_WIDTH-1:0] config_weight0,
     input  logic signed [DATA_WIDTH-1:0] config_weight1,
-    input  logic [1:0]                   config_index0,
-    input  logic [1:0]                   config_index1,
+    input  logic signed [DATA_WIDTH-1:0] config_weight2,
+    input  logic signed [DATA_WIDTH-1:0] config_weight3,
 
     output logic signed [ACC_WIDTH-1:0] out_data,
     output logic [7:0] out_row,
@@ -74,13 +74,13 @@ module sparse_matmul_4x4_streaming #(
     localparam int K_WIDTH = $clog2(MAX_K + 1);
     localparam int GROUP_WIDTH = (MAX_GROUPS <= 1) ? 1 : $clog2(MAX_GROUPS);
     localparam int GROUPS_PER_CYCLE =
-        (SPARSE_GROUPS_PER_CYCLE < 1) ? 1 :
-        ((SPARSE_GROUPS_PER_CYCLE > MAX_GROUPS) ? MAX_GROUPS : SPARSE_GROUPS_PER_CYCLE);
+        (GROUPS_PER_CYCLE_CFG < 1) ? 1 :
+        ((GROUPS_PER_CYCLE_CFG > MAX_GROUPS) ? MAX_GROUPS : GROUPS_PER_CYCLE_CFG);
 
     logic signed [DATA_WIDTH-1:0] weight0 [0:M_MAX-1][0:MAX_GROUPS-1];
     logic signed [DATA_WIDTH-1:0] weight1 [0:M_MAX-1][0:MAX_GROUPS-1];
-    logic [1:0] index0 [0:M_MAX-1][0:MAX_GROUPS-1];
-    logic [1:0] index1 [0:M_MAX-1][0:MAX_GROUPS-1];
+    logic signed [DATA_WIDTH-1:0] weight2 [0:M_MAX-1][0:MAX_GROUPS-1];
+    logic signed [DATA_WIDTH-1:0] weight3 [0:M_MAX-1][0:MAX_GROUPS-1];
 
     logic [M_WIDTH-1:0] active_m;
     logic [K_WIDTH-1:0] active_k;
@@ -133,23 +133,6 @@ module sparse_matmul_4x4_streaming #(
         end
     endfunction
 
-    function automatic logic signed [DATA_WIDTH-1:0] select_group_value(
-        input logic [1:0] lane,
-        input logic signed [DATA_WIDTH-1:0] value0,
-        input logic signed [DATA_WIDTH-1:0] value1,
-        input logic signed [DATA_WIDTH-1:0] value2,
-        input logic signed [DATA_WIDTH-1:0] value3
-    );
-        begin
-            case (lane)
-                2'd0: select_group_value = value0;
-                2'd1: select_group_value = value1;
-                2'd2: select_group_value = value2;
-                default: select_group_value = value3;
-            endcase
-        end
-    endfunction
-
     function automatic logic signed [ACC_WIDTH-1:0] group_contribution(
         input logic [M_WIDTH-1:0] row,
         input logic [GROUP_WIDTH-1:0] group_idx,
@@ -160,15 +143,15 @@ module sparse_matmul_4x4_streaming #(
     );
         logic signed [(2*DATA_WIDTH)-1:0] product0;
         logic signed [(2*DATA_WIDTH)-1:0] product1;
+        logic signed [(2*DATA_WIDTH)-1:0] product2;
+        logic signed [(2*DATA_WIDTH)-1:0] product3;
         begin
-            product0 =
-                weight0[row][group_idx] *
-                select_group_value(index0[row][group_idx], value0, value1, value2, value3);
-            product1 =
-                weight1[row][group_idx] *
-                select_group_value(index1[row][group_idx], value0, value1, value2, value3);
+            product0 = weight0[row][group_idx] * value0;
+            product1 = weight1[row][group_idx] * value1;
+            product2 = weight2[row][group_idx] * value2;
+            product3 = weight3[row][group_idx] * value3;
 
-            group_contribution = product0 + product1;
+            group_contribution = product0 + product1 + product2 + product3;
         end
     endfunction
 
@@ -199,37 +182,37 @@ module sparse_matmul_4x4_streaming #(
                 for (int group_idx = 0; group_idx < MAX_GROUPS; group_idx++) begin
                     weight0[row][group_idx] <= '0;
                     weight1[row][group_idx] <= '0;
-                    index0[row][group_idx] <= 2'd0;
-                    index1[row][group_idx] <= 2'd0;
+                    weight2[row][group_idx] <= '0;
+                    weight3[row][group_idx] <= '0;
                 end
             end
 
             if (M_MAX > 0) begin
                 weight0[0][0] <= ROW0_WEIGHT0;
                 weight1[0][0] <= ROW0_WEIGHT1;
-                index0[0][0] <= ROW0_INDEX0;
-                index1[0][0] <= ROW0_INDEX1;
+                weight2[0][0] <= ROW0_WEIGHT2;
+                weight3[0][0] <= ROW0_WEIGHT3;
             end
 
             if (M_MAX > 1) begin
                 weight0[1][0] <= ROW1_WEIGHT0;
                 weight1[1][0] <= ROW1_WEIGHT1;
-                index0[1][0] <= ROW1_INDEX0;
-                index1[1][0] <= ROW1_INDEX1;
+                weight2[1][0] <= ROW1_WEIGHT2;
+                weight3[1][0] <= ROW1_WEIGHT3;
             end
 
             if (M_MAX > 2) begin
                 weight0[2][0] <= ROW2_WEIGHT0;
                 weight1[2][0] <= ROW2_WEIGHT1;
-                index0[2][0] <= ROW2_INDEX0;
-                index1[2][0] <= ROW2_INDEX1;
+                weight2[2][0] <= ROW2_WEIGHT2;
+                weight3[2][0] <= ROW2_WEIGHT3;
             end
 
             if (M_MAX > 3) begin
                 weight0[3][0] <= ROW3_WEIGHT0;
                 weight1[3][0] <= ROW3_WEIGHT1;
-                index0[3][0] <= ROW3_INDEX0;
-                index1[3][0] <= ROW3_INDEX1;
+                weight2[3][0] <= ROW3_WEIGHT2;
+                weight3[3][0] <= ROW3_WEIGHT3;
             end
         end else begin
             if (config_valid && !busy && dims_valid(config_m, config_k, config_n)) begin
@@ -241,8 +224,8 @@ module sparse_matmul_4x4_streaming #(
                 if ((config_row < config_m) && (config_group < 8'(groups_from_k(config_k)))) begin
                     weight0[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_weight0;
                     weight1[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_weight1;
-                    index0[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_index0;
-                    index1[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_index1;
+                    weight2[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_weight2;
+                    weight3[config_row[M_WIDTH-1:0]][config_group[GROUP_WIDTH-1:0]] <= config_weight3;
                 end
             end
 

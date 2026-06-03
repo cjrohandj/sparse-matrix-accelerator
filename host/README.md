@@ -4,13 +4,12 @@
 DE10-Lite UART top, waits for the waiting-room acknowledgment, and prints the
 returned MxN signed-int64 result.
 
-`send_weights_uart.py` sends runtime sparse A weights and indices to the board.
-It accepts the `Sparse values:` and `Sparse indices:` lines printed by
-`prune_2_of_4.py`, infers M from the row count, infers K from the number of
-4-column sparse groups, and includes runtime N from `--n` in the UART packet.
+`send_weights_uart.py` sends runtime dense A weights to the board. It accepts
+an `MxK` dense matrix, infers `M` from the row count, infers `K` from the
+column count, and includes runtime `N` from `--n` in the UART packet.
 
-Hardware performance for larger K depends on the synthesis-time
-`SPARSE_GROUPS_PER_CYCLE` parameter in `de10_lite_uart_top.sv`.
+Hardware performance for larger `K` depends on the synthesis-time
+`GROUPS_PER_CYCLE_CFG` parameter in `de10_lite_uart_top.sv`.
 
 Install the serial dependency:
 
@@ -82,20 +81,20 @@ python3 host/send_matrix_uart.py \
   --label "Pruned weights"
 ```
 
-Configure runtime sparse weights from `prune_2_of_4.py` output:
+Configure runtime dense A weights:
+
+```sh
+python3 host/send_weights_uart.py \
+  --matrix '[[3,-1,0,2],[4,5,-2,1],[0,-7,6,2],[8,1,-3,4]]' \
+  --n 4 \
+  --port /dev/tty.usbserial-XXXX
+```
+
+Parse a matrix block from a file or from `prune_2_of_4.py` output:
 
 ```sh
 python3 prune_2_of_4.py | \
   python3 host/send_weights_uart.py --n 4 --port /dev/tty.usbserial-XXXX
-```
-
-Or let `prune_2_of_4.py` print a copy-paste command with your serial port:
-
-```sh
-python3 prune_2_of_4.py \
-  --matrix '[[3,-1,0,2],[4,5,-2,1],[0,-7,6,2],[8,1,-3,4]]' \
-  --n 4 \
-  --serial-port /dev/tty.usbserial-XXXX
 ```
 
 Build a copy-paste command for a sequence of activation matrices:
@@ -106,10 +105,12 @@ python3 host/make_activation_queue_command.py \
   --matrices '[[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]],[[2,4,6,8],[10,12,14,16],[18,20,22,24],[26,28,30,32]]]'
 ```
 
-Dry-run the weight packet:
+Dry-run the dense-A packet:
 
 ```sh
-python3 prune_2_of_4.py | python3 host/send_weights_uart.py --dry-run
+python3 host/send_weights_uart.py \
+  --matrix '[[3,-1,0,2],[4,5,-2,1],[0,-7,6,2],[8,1,-3,4]]' \
+  --dry-run
 ```
 
 The dense B packet is serialized column-by-column so the FPGA can begin
@@ -129,5 +130,6 @@ FPGA -> PC: 0x55 + M uint8 + N uint8 + M*N tagged entries
              each entry is row uint8 + col uint8 + signed int64 value
 
 PC -> FPGA: 0xA0 + M uint8 + K uint8 + N uint8 + M*(K/4) records
+             each record is four signed int16 weights
 FPGA -> PC: 0x5A config acknowledgment
 ```

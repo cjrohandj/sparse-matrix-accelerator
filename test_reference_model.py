@@ -6,10 +6,10 @@ from reference_model import matmul
 class ReferenceModelTest(unittest.TestCase):
     def test_matmul(self) -> None:
         lhs = [
-            [3, 0, 0, 2],
-            [4, 5, 0, 0],
-            [0, -7, 6, 0],
-            [8, 0, 0, 4],
+            [3, -1, 0, 2],
+            [4, 5, -2, 1],
+            [0, -7, 6, 2],
+            [8, 1, -3, 4],
         ]
         rhs = [
             [1, 2, 3, 4],
@@ -21,10 +21,10 @@ class ReferenceModelTest(unittest.TestCase):
         self.assertEqual(
             matmul(lhs, rhs),
             [
-                [29, 34, 39, 44],
-                [29, 38, 47, 56],
-                [19, 18, 17, 16],
-                [60, 72, 84, 96],
+                [24, 28, 32, 36],
+                [24, 32, 40, 48],
+                [45, 46, 47, 48],
+                [38, 48, 58, 68],
             ],
         )
 

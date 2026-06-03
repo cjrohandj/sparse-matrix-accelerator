@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Configure the DE10-Lite sparse weights over UART.
+"""Configure the DE10-Lite dense A weights over UART.
 
 The expected FPGA packet is implemented by rtl_board/matrix_uart_controller.sv:
 
 Host -> FPGA:
     0xA0
-    M uint8, inferred from the sparse row count
-    K uint8, inferred from the sparse group count
+    M uint8, inferred from the dense A row count
+    K uint8, inferred from the dense A column count
     N uint8, provided by --n
-    M * (K/4) sparse row/group records, each encoded as:
+    M * (K/4) dense row/group records, each encoded as:
         weight0 int16 little-endian
         weight1 int16 little-endian
-        index0  uint8
-        index1  uint8
+        weight2 int16 little-endian
+        weight3 int16 little-endian
 
 FPGA -> Host:
     0x5A
@@ -27,18 +27,19 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 CONFIG_START_BYTE = 0xA0
 CONFIG_ACK_BYTE = 0x5A
-ROWS = 4
-LANES = 2
 GROUP_WIDTH = 4
 INPUT_MIN = -(2**15)
 INPUT_MAX = (2**15) - 1
 
-SparseValues = list[list[list[int]]]
-SparseIndices = list[list[list[int]]]
+Matrix = list[list[int]]
+
+
+def format_matrix(matrix: Iterable[Iterable[int]]) -> str:
+    return "\n".join(" ".join(f"{value:>8}" for value in row) for row in matrix)
 
 
 def _coerce_int16(value: Any) -> int:
@@ -58,107 +59,172 @@ def _coerce_int16(value: Any) -> int:
     return number
 
 
-def _coerce_index(value: Any) -> int:
-    if isinstance(value, bool):
-        raise ValueError("indices must be integers, not booleans")
-    if isinstance(value, int):
-        number = value
-    elif isinstance(value, str):
-        number = int(value.strip(), 0)
-    else:
-        raise ValueError(f"index {value!r} is not an integer")
+def normalize_weight_matrix(value: Any) -> Matrix:
+    if isinstance(value, dict):
+        for key in (
+            "dense_a",
+            "dense_A",
+            "weight_matrix",
+            "weights",
+            "matrix",
+            "A",
+            "a",
+            "dense_weights",
+            "pruned_weights",
+            "Pruned weights",
+        ):
+            if key in value:
+                value = value[key]
+                break
+        else:
+            raise ValueError("weight matrix dictionary must contain a matrix-like key such as 'dense_a' or 'matrix'")
 
-    if not 0 <= number <= 3:
-        raise ValueError(f"index {number} is outside the 2-bit range 0..3")
-    return number
-
-
-def _normalize_grouped_rows(value: Any, name: str) -> list[list[list[Any]]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        raise ValueError(f"{name} must be a sequence of rows")
+        raise ValueError("weight matrix must be a sequence of rows")
 
     rows = list(value)
     if not rows:
-        raise ValueError(f"{name} must contain at least one row")
+        raise ValueError("weight matrix must contain at least one row")
     if len(rows) > 255:
-        raise ValueError(f"{name} cannot contain more than 255 rows")
+        raise ValueError("weight matrix cannot contain more than 255 rows")
+    if not isinstance(rows[0], Sequence) or isinstance(rows[0], (str, bytes, bytearray)):
+        raise ValueError("weight matrix row 0 must be a sequence")
 
-    normalized: list[list[list[Any]]] = []
+    column_count = len(rows[0])
+    if column_count < GROUP_WIDTH or (column_count % GROUP_WIDTH) != 0:
+        raise ValueError("weight matrix must have K columns, where K is a multiple of 4")
+    if column_count > 255:
+        raise ValueError("weight matrix cannot contain more than 255 columns")
+
+    matrix: Matrix = []
     for row_idx, row in enumerate(rows):
         if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
-            raise ValueError(f"{name} row {row_idx} must be a sequence")
+            raise ValueError(f"weight matrix row {row_idx} must be a sequence")
+        row_values = list(row)
+        if len(row_values) != column_count:
+            raise ValueError(f"weight matrix row {row_idx} must have exactly {column_count} columns")
+        matrix.append([_coerce_int16(entry) for entry in row_values])
 
-        row_groups = list(row)
-        if not row_groups:
-            raise ValueError(f"{name} row {row_idx} must contain at least one 4-column group")
-
-        normalized_groups: list[list[Any]] = []
-        for group_idx, group in enumerate(row_groups):
-            if not isinstance(group, Sequence) or isinstance(group, (str, bytes, bytearray)):
-                raise ValueError(f"{name} row {row_idx} group {group_idx} must be a sequence")
-
-            group_values = list(group)
-            if len(group_values) != LANES:
-                raise ValueError(
-                    f"{name} row {row_idx} group {group_idx} must contain exactly {LANES} entries"
-                )
-            normalized_groups.append(group_values)
-
-        normalized.append(normalized_groups)
-
-    group_count = len(normalized[0])
-    if any(len(row) != group_count for row in normalized):
-        raise ValueError(f"{name} must contain the same number of groups in every row")
-
-    return normalized
+    return matrix
 
 
-def normalize_sparse_values(value: Any) -> SparseValues:
-    return [
-        [[_coerce_int16(entry) for entry in group] for group in row]
-        for row in _normalize_grouped_rows(value, "values")
+def _parse_literal_matrix(text: str) -> Matrix | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    try:
+        return normalize_weight_matrix(ast.literal_eval(stripped))
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _parse_numeric_row(line: str) -> list[int] | None:
+    stripped = line.strip()
+    if not stripped or re.search(r"[A-Za-z:]", stripped):
+        return None
+
+    numbers = re.findall(r"[-+]?(?:0x[0-9A-Fa-f]+|\d+)", stripped)
+    if not numbers:
+        return None
+
+    remainder = re.sub(r"[-+]?(?:0x[0-9A-Fa-f]+|\d+)", "", stripped)
+    if re.search(r"[^\s,\[\]\(\)]", remainder):
+        return None
+
+    return [_coerce_int16(number) for number in numbers]
+
+
+def _label_matches(line: str, label: str) -> bool:
+    normalized_line = line.strip().lower()
+    normalized_label = label.strip().lower()
+
+    return (
+        normalized_line == normalized_label
+        or normalized_line == f"{normalized_label}:"
+        or normalized_line.startswith(f"{normalized_label}:")
+    )
+
+
+def _parse_labeled_block(text: str, labels: Sequence[str]) -> Matrix | None:
+    lines = text.splitlines()
+
+    for label in labels:
+        for line_index, line in enumerate(lines):
+            if not _label_matches(line, label):
+                continue
+
+            rows: list[list[int]] = []
+            for candidate in lines[line_index + 1 :]:
+                row = _parse_numeric_row(candidate)
+                if row is None:
+                    if rows:
+                        break
+                    continue
+                rows.append(row)
+            if rows:
+                return normalize_weight_matrix(rows)
+
+    return None
+
+
+def _parse_first_matrix_block(text: str) -> Matrix | None:
+    rows: list[list[int]] = []
+
+    for line in text.splitlines():
+        row = _parse_numeric_row(line)
+        if row is not None:
+            rows.append(row)
+        elif rows:
+            try:
+                return normalize_weight_matrix(rows)
+            except ValueError:
+                rows = []
+
+    if rows:
+        try:
+            return normalize_weight_matrix(rows)
+        except ValueError:
+            pass
+
+    return None
+
+
+def parse_weight_matrix_text(text: str, label: str | None = None) -> Matrix:
+    literal_matrix = _parse_literal_matrix(text)
+    if literal_matrix is not None:
+        return literal_matrix
+
+    labels = [label] if label else [
+        "Dense A",
+        "Dense weights",
+        "Weight matrix",
+        "Matrix A",
+        "Weights",
+        "Pruned weights",
+        "Pruned matrix",
+        "Matrix",
     ]
+    labeled_matrix = _parse_labeled_block(text, labels)
+    if labeled_matrix is not None:
+        return labeled_matrix
+
+    block_matrix = _parse_first_matrix_block(text)
+    if block_matrix is not None:
+        return block_matrix
+
+    raise ValueError(
+        "could not find an MxK weight matrix. Use --matrix '[[1,2,3,4],...]', "
+        "--file matrix.txt, or pipe rows of numbers into stdin."
+    )
 
 
-def normalize_sparse_indices(value: Any) -> SparseIndices:
-    return [
-        [[_coerce_index(entry) for entry in group] for group in row]
-        for row in _normalize_grouped_rows(value, "indices")
-    ]
+def infer_m(matrix: Sequence[Sequence[int]]) -> int:
+    return len(normalize_weight_matrix(matrix))
 
 
-def _extract_literal_after_label(text: str, label: str) -> Any:
-    pattern = re.compile(rf"^{re.escape(label)}\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-    match = pattern.search(text)
-    if not match:
-        raise ValueError(f"could not find '{label}:' in input")
-    return ast.literal_eval(match.group(1).strip())
-
-
-def parse_prune_text(text: str) -> tuple[SparseValues, SparseIndices]:
-    values = normalize_sparse_values(_extract_literal_after_label(text, "Sparse values"))
-    indices = normalize_sparse_indices(_extract_literal_after_label(text, "Sparse indices"))
-    return values, indices
-
-
-def infer_k(values: Sequence[Sequence[Sequence[int]]], indices: Sequence[Sequence[Sequence[int]]]) -> int:
-    normalized_values = normalize_sparse_values(values)
-    normalized_indices = normalize_sparse_indices(indices)
-    value_groups = len(normalized_values[0])
-    index_groups = len(normalized_indices[0])
-    if value_groups != index_groups:
-        raise ValueError("values and indices must have the same number of groups")
-
-    return value_groups * GROUP_WIDTH
-
-
-def infer_m(values: Sequence[Sequence[Sequence[int]]], indices: Sequence[Sequence[Sequence[int]]]) -> int:
-    normalized_values = normalize_sparse_values(values)
-    normalized_indices = normalize_sparse_indices(indices)
-    if len(normalized_values) != len(normalized_indices):
-        raise ValueError("values and indices must have the same number of rows")
-
-    return len(normalized_values)
+def infer_k(matrix: Sequence[Sequence[int]]) -> int:
+    return len(normalize_weight_matrix(matrix)[0])
 
 
 def _coerce_uint8_dimension(value: Any, name: str) -> int:
@@ -170,27 +236,19 @@ def _coerce_uint8_dimension(value: Any, name: str) -> int:
     return number
 
 
-def build_config_packet(
-    values: Sequence[Sequence[Sequence[int]]],
-    indices: Sequence[Sequence[Sequence[int]]],
-    n_value: int = 4,
-) -> bytes:
-    normalized_values = normalize_sparse_values(values)
-    normalized_indices = normalize_sparse_indices(indices)
-    m_value = infer_m(normalized_values, normalized_indices)
-    k_value = infer_k(normalized_values, normalized_indices)
+def build_config_packet(matrix: Sequence[Sequence[int]], n_value: int = 4) -> bytes:
+    normalized = normalize_weight_matrix(matrix)
+    m_value = len(normalized)
+    k_value = len(normalized[0])
     n_value = _coerce_uint8_dimension(n_value, "N")
 
     payload = bytearray()
     payload.append(m_value)
     payload.append(k_value)
     payload.append(n_value)
-    groups = k_value // GROUP_WIDTH
-    for row in range(m_value):
-        for group in range(groups):
-            weight0, weight1 = normalized_values[row][group]
-            index0, index1 = normalized_indices[row][group]
-            payload.extend(struct.pack("<hhBB", weight0, weight1, index0, index1))
+    for row in normalized:
+        for group_start in range(0, k_value, GROUP_WIDTH):
+            payload.extend(struct.pack("<hhhh", *row[group_start : group_start + GROUP_WIDTH]))
 
     return bytes([CONFIG_START_BYTE]) + bytes(payload)
 
@@ -214,8 +272,7 @@ def transact(
     port: str,
     baud: int,
     timeout: float,
-    values: Sequence[Sequence[Sequence[int]]],
-    indices: Sequence[Sequence[Sequence[int]]],
+    matrix: Sequence[Sequence[int]],
     n_value: int,
 ) -> None:
     try:
@@ -223,7 +280,7 @@ def transact(
     except ImportError as exc:
         raise SystemExit("pyserial is required: python3 -m pip install pyserial") from exc
 
-    packet = build_config_packet(values, indices, n_value=n_value)
+    packet = build_config_packet(matrix, n_value=n_value)
     with serial.Serial(port, baudrate=baud, timeout=timeout, write_timeout=timeout) as ser:
         time.sleep(0.1)
         ser.reset_input_buffer()
@@ -252,14 +309,13 @@ def list_ports() -> None:
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Send runtime sparse A weights/indices to the DE10-Lite UART top."
+        description="Send runtime dense A weights to the DE10-Lite UART top."
     )
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--file", type=Path, help="file containing prune_2_of_4.py-style output")
-    source.add_argument("--text", help="literal text containing Sparse values and Sparse indices lines")
+    source.add_argument("--file", type=Path, help="file containing dense-A or prune-style matrix output")
+    source.add_argument("--text", help="literal text containing a dense-A matrix")
 
-    parser.add_argument("--values", help="Sparse values literal, e.g. '[[[3,2]],[[4,5]],...]'")
-    parser.add_argument("--indices", help="Sparse indices literal, e.g. '[[[0,3]],[[0,1]],...]'")
+    parser.add_argument("--matrix", help="Dense A matrix literal, e.g. '[[3,-1,0,2],[4,5,-2,1]]'")
     parser.add_argument("--n", type=int, default=4, help="runtime dense/output column count N")
     parser.add_argument("--port", help="serial port, such as COM3 or /dev/tty.usbserial-XXXX")
     parser.add_argument("--baud", type=int, default=115200, help="UART baud rate")
@@ -270,25 +326,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_values_and_indices(args: argparse.Namespace) -> tuple[SparseValues, SparseIndices]:
-    if args.values is not None or args.indices is not None:
-        if args.values is None or args.indices is None:
-            raise SystemExit("--values and --indices must be provided together")
-        return (
-            normalize_sparse_values(ast.literal_eval(args.values)),
-            normalize_sparse_indices(ast.literal_eval(args.indices)),
-        )
+def _load_weight_matrix(args: argparse.Namespace) -> Matrix:
+    if args.matrix is not None:
+        return normalize_weight_matrix(ast.literal_eval(args.matrix))
 
     if args.file is not None:
-        return parse_prune_text(args.file.read_text(encoding="utf-8"))
+        return parse_weight_matrix_text(args.file.read_text(encoding="utf-8"))
 
     if args.text is not None:
-        return parse_prune_text(args.text)
+        return parse_weight_matrix_text(args.text)
 
     if not sys.stdin.isatty():
-        return parse_prune_text(sys.stdin.read())
+        return parse_weight_matrix_text(sys.stdin.read())
 
-    raise SystemExit("provide --file, --text, --values/--indices, or pipe prune output into stdin")
+    raise SystemExit("provide --matrix, --file, --text, or pipe matrix text into stdin")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -298,15 +349,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         list_ports()
         return 0
 
-    values, indices = _load_values_and_indices(args)
-    packet = build_config_packet(values, indices, n_value=args.n)
-    m_value = infer_m(values, indices)
-    k_value = infer_k(values, indices)
+    matrix = _load_weight_matrix(args)
+    packet = build_config_packet(matrix, n_value=args.n)
+    m_value = infer_m(matrix)
+    k_value = infer_k(matrix)
 
-    print("Sparse values:")
-    print(values)
-    print("Sparse indices:")
-    print(indices)
+    print("Dense A weights:")
+    print(format_matrix(matrix))
     print(f"Inferred M: {m_value}")
     print(f"Inferred K: {k_value}")
     print(f"Runtime N: {args.n}")
@@ -319,8 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.port:
         raise SystemExit("provide --port, or use --dry-run to only build the packet")
 
-    transact(args.port, args.baud, args.timeout, values, indices, args.n)
-    print("Runtime sparse weights configured.")
+    transact(args.port, args.baud, args.timeout, matrix, args.n)
+    print("Runtime dense weights configured.")
     return 0
 
 

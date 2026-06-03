@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// DE10-Lite board top for streaming dense matrix B to the sparse matmul core
+// DE10-Lite board top for streaming dense matrix B to the dense matmul core
 // over an external 3.3 V USB-UART adapter.
 //
 // Suggested wiring:
@@ -22,30 +22,30 @@ module de10_lite_uart_top #(
     parameter int N_MAX = 4,
     parameter int M_TILE = 4,
     parameter int N_TILE = 4,
-    parameter int SPARSE_GROUPS_PER_CYCLE = 1,
-    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(2 * (MAX_K / 4)) + 1,
+    parameter int GROUPS_PER_CYCLE_CFG = 1,
+    parameter int ACC_WIDTH = (2 * DATA_WIDTH) + $clog2(MAX_K) + 1,
     parameter int CLKS_PER_BIT = 434,
     parameter int RESULT_START_IDLE_CYCLES = 1,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT0 = 16'sd3,
-    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT1 = 16'sd2,
-    parameter logic [1:0] ROW0_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW0_INDEX1 = 2'd3,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT1 = -16'sd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT2 = 16'sd0,
+    parameter logic signed [DATA_WIDTH-1:0] ROW0_WEIGHT3 = 16'sd2,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT0 = 16'sd4,
     parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT1 = 16'sd5,
-    parameter logic [1:0] ROW1_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW1_INDEX1 = 2'd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT2 = -16'sd2,
+    parameter logic signed [DATA_WIDTH-1:0] ROW1_WEIGHT3 = 16'sd1,
 
-    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT0 = -16'sd7,
-    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT1 = 16'sd6,
-    parameter logic [1:0] ROW2_INDEX0 = 2'd1,
-    parameter logic [1:0] ROW2_INDEX1 = 2'd2,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT0 = 16'sd0,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT1 = -16'sd7,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT2 = 16'sd6,
+    parameter logic signed [DATA_WIDTH-1:0] ROW2_WEIGHT3 = 16'sd2,
 
     parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT0 = 16'sd8,
-    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT1 = 16'sd4,
-    parameter logic [1:0] ROW3_INDEX0 = 2'd0,
-    parameter logic [1:0] ROW3_INDEX1 = 2'd3
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT1 = 16'sd1,
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT2 = -16'sd3,
+    parameter logic signed [DATA_WIDTH-1:0] ROW3_WEIGHT3 = 16'sd4
 ) (
     input  logic       MAX10_CLK1_50,
     input  logic [1:0] KEY,
@@ -79,8 +79,8 @@ module de10_lite_uart_top #(
     logic [7:0] core_config_group;
     logic signed [DATA_WIDTH-1:0] core_config_weight0;
     logic signed [DATA_WIDTH-1:0] core_config_weight1;
-    logic [1:0] core_config_index0;
-    logic [1:0] core_config_index1;
+    logic signed [DATA_WIDTH-1:0] core_config_weight2;
+    logic signed [DATA_WIDTH-1:0] core_config_weight3;
     logic signed [ACC_WIDTH-1:0] core_out_data;
     logic [7:0] core_out_row;
     logic [7:0] core_out_col;
@@ -157,8 +157,8 @@ module de10_lite_uart_top #(
         .core_config_group(core_config_group),
         .core_config_weight0(core_config_weight0),
         .core_config_weight1(core_config_weight1),
-        .core_config_index0(core_config_index0),
-        .core_config_index1(core_config_index1),
+        .core_config_weight2(core_config_weight2),
+        .core_config_weight3(core_config_weight3),
         .core_out_data(core_out_data),
         .core_out_row(core_out_row),
         .core_out_col(core_out_col),
@@ -178,24 +178,24 @@ module de10_lite_uart_top #(
         .N_MAX(N_MAX),
         .M_TILE(M_TILE),
         .N_TILE(N_TILE),
-        .SPARSE_GROUPS_PER_CYCLE(SPARSE_GROUPS_PER_CYCLE),
+        .GROUPS_PER_CYCLE_CFG(GROUPS_PER_CYCLE_CFG),
         .ACC_WIDTH(ACC_WIDTH),
         .ROW0_WEIGHT0(ROW0_WEIGHT0),
         .ROW0_WEIGHT1(ROW0_WEIGHT1),
-        .ROW0_INDEX0(ROW0_INDEX0),
-        .ROW0_INDEX1(ROW0_INDEX1),
+        .ROW0_WEIGHT2(ROW0_WEIGHT2),
+        .ROW0_WEIGHT3(ROW0_WEIGHT3),
         .ROW1_WEIGHT0(ROW1_WEIGHT0),
         .ROW1_WEIGHT1(ROW1_WEIGHT1),
-        .ROW1_INDEX0(ROW1_INDEX0),
-        .ROW1_INDEX1(ROW1_INDEX1),
+        .ROW1_WEIGHT2(ROW1_WEIGHT2),
+        .ROW1_WEIGHT3(ROW1_WEIGHT3),
         .ROW2_WEIGHT0(ROW2_WEIGHT0),
         .ROW2_WEIGHT1(ROW2_WEIGHT1),
-        .ROW2_INDEX0(ROW2_INDEX0),
-        .ROW2_INDEX1(ROW2_INDEX1),
+        .ROW2_WEIGHT2(ROW2_WEIGHT2),
+        .ROW2_WEIGHT3(ROW2_WEIGHT3),
         .ROW3_WEIGHT0(ROW3_WEIGHT0),
         .ROW3_WEIGHT1(ROW3_WEIGHT1),
-        .ROW3_INDEX0(ROW3_INDEX0),
-        .ROW3_INDEX1(ROW3_INDEX1)
+        .ROW3_WEIGHT2(ROW3_WEIGHT2),
+        .ROW3_WEIGHT3(ROW3_WEIGHT3)
     ) sparse_core_inst (
         .clk(clk),
         .rst_n(rst_n),
@@ -210,8 +210,8 @@ module de10_lite_uart_top #(
         .config_group(core_config_group),
         .config_weight0(core_config_weight0),
         .config_weight1(core_config_weight1),
-        .config_index0(core_config_index0),
-        .config_index1(core_config_index1),
+        .config_weight2(core_config_weight2),
+        .config_weight3(core_config_weight3),
         .out_data(core_out_data),
         .out_row(core_out_row),
         .out_col(core_out_col),

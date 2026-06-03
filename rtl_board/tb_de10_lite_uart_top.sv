@@ -12,12 +12,13 @@ module tb_de10_lite_uart_top;
 
     logic [7:0] rx_byte;
     logic signed [63:0] result_word;
+    int max_result_fifo_count;
 
     de10_lite_uart_top #(
         .M_MAX(4),
         .N_MAX(5),
         .N_TILE(4),
-        .SPARSE_GROUPS_PER_CYCLE(2),
+        .GROUPS_PER_CYCLE_CFG(2),
         .CLKS_PER_BIT(CLKS_PER_BIT)
     ) dut (
         .MAX10_CLK1_50(clk),
@@ -78,17 +79,17 @@ module tb_de10_lite_uart_top;
         end
     endtask
 
-    task automatic send_sparse_row(
+    task automatic send_dense_row(
         input logic signed [15:0] weight0,
         input logic signed [15:0] weight1,
-        input logic [1:0] index0,
-        input logic [1:0] index1
+        input logic signed [15:0] weight2,
+        input logic signed [15:0] weight3
     );
         begin
             send_i16(weight0);
             send_i16(weight1);
-            send_uart_byte({6'd0, index0});
-            send_uart_byte({6'd0, index1});
+            send_i16(weight2);
+            send_i16(weight3);
         end
     endtask
 
@@ -153,7 +154,11 @@ module tb_de10_lite_uart_top;
                         result_word[(byte_index * 8) +: 8] = rx_byte;
                     end
 
-                    expected_value = ((row * 5) + col + 1) * result_scale;
+                    case (row)
+                        0: expected_value = ((13 + (3 * col)) * result_scale);
+                        1: expected_value = ((39 + (4 * col)) * result_scale);
+                        default: expected_value = ((75 + (5 * col)) * result_scale);
+                    endcase
                     if (result_word !== expected_value) begin
                         $error(
                             "result scale %0d [%0d][%0d] expected %0d, got %0d",
@@ -173,20 +178,21 @@ module tb_de10_lite_uart_top;
         clk = 1'b0;
         key = 2'b00;
         uart_rx = 1'b1;
+        max_result_fifo_count = 0;
 
         repeat (5) @(posedge clk);
         key = 2'b11;
         wait_bit_times(2);
 
-        // Configure sparse A as 3x4. It selects B rows 0, 1, and 2, while N=5
-        // makes the core step across two internal N tiles.
+        // Configure dense A as 3x4 while N=5 makes the core step across two
+        // internal N tiles.
         send_uart_byte(8'hA0);
         send_uart_byte(8'd3);
         send_uart_byte(8'd4);
         send_uart_byte(8'd5);
-        send_sparse_row(16'sd1, 16'sd0, 2'd0, 2'd1);
-        send_sparse_row(16'sd1, 16'sd0, 2'd1, 2'd0);
-        send_sparse_row(16'sd1, 16'sd0, 2'd2, 2'd0);
+        send_dense_row(16'sd1, 16'sd2, 16'sd0, 16'sd0);
+        send_dense_row(16'sd0, 16'sd1, 16'sd3, 16'sd0);
+        send_dense_row(16'sd0, 16'sd0, 16'sd1, 16'sd4);
 
         expect_single_byte(8'h5A, "config ack");
 
@@ -207,8 +213,18 @@ module tb_de10_lite_uart_top;
             end
         join
 
+        if (max_result_fifo_count <= 1) begin
+            $error("expected controller result FIFO to buffer ahead of UART, max depth=%0d", max_result_fifo_count);
+        end
+
         $display("PASS: DE10-Lite UART top streams immediate tagged MxN results");
         $finish;
+    end
+
+    always @(posedge clk) begin
+        if (dut.controller_inst.result_fifo_count > max_result_fifo_count) begin
+            max_result_fifo_count <= dut.controller_inst.result_fifo_count;
+        end
     end
 
 endmodule

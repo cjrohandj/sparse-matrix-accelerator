@@ -523,7 +523,7 @@ def _read_source_text(args: argparse.Namespace) -> str | None:
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Send a KxN int16 dense B matrix to the DE10-Lite sparse matmul UART top."
+        description="Send a KxN int16 dense B matrix to the DE10-Lite dense matmul UART top."
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--matrix", help="KxN matrix as a Python/JSON literal")

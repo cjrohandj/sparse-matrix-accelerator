@@ -49,11 +49,11 @@ def format_matrix(matrix: Iterable[Iterable[Number]]) -> str:
 
 
 def main() -> None:
-    pruned_weights = [
-        [3, 0, 0, 2],
-        [4, 5, 0, 0],
-        [0, -7, 6, 0],
-        [8, 0, 0, 4],
+    dense_weights = [
+        [3, -1, 0, 2],
+        [4, 5, -2, 1],
+        [0, -7, 6, 2],
+        [8, 1, -3, 4],
     ]
     dense_input = [
         [1, 2, 3, 4],
@@ -63,7 +63,7 @@ def main() -> None:
     ]
 
     print("Expected output:")
-    print(format_matrix(matmul(pruned_weights, dense_input)))
+    print(format_matrix(matmul(dense_weights, dense_input)))
 
 
 if __name__ == "__main__":
