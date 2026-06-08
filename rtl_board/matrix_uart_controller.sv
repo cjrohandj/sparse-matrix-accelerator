@@ -92,12 +92,15 @@ module matrix_uart_controller #(
     localparam int MAX_MATRIX_ELEMS = MAX_K * N_MAX;
     localparam int MAX_RESULT_ELEMS = M_MAX * N_MAX;
     localparam int VALUE_FIFO_DEPTH = MAX_MATRIX_ELEMS * MATRIX_FIFO_DEPTH;
+    localparam int RESULT_FIFO_DEPTH = MAX_RESULT_ELEMS * MATRIX_FIFO_DEPTH;
     localparam int RESULT_BYTES = RESULT_WIDTH / 8;
     localparam int MAX_GROUPS = MAX_K / 4;
     localparam int MATRIX_COUNT_WIDTH = $clog2(MAX_MATRIX_ELEMS + 1);
     localparam int RESULT_COUNT_WIDTH = $clog2(MAX_RESULT_ELEMS + 1);
     localparam int VALUE_FIFO_INDEX_WIDTH = (VALUE_FIFO_DEPTH <= 1) ? 1 : $clog2(VALUE_FIFO_DEPTH);
     localparam int VALUE_FIFO_COUNT_WIDTH = $clog2(VALUE_FIFO_DEPTH + 1);
+    localparam int RESULT_FIFO_INDEX_WIDTH = (RESULT_FIFO_DEPTH <= 1) ? 1 : $clog2(RESULT_FIFO_DEPTH);
+    localparam int RESULT_FIFO_COUNT_WIDTH = $clog2(RESULT_FIFO_DEPTH + 1);
     localparam int FIFO_COUNT_WIDTH = $clog2(MATRIX_FIFO_DEPTH + 1);
     localparam int GROUP_WIDTH = (MAX_GROUPS <= 1) ? 1 : $clog2(MAX_GROUPS);
     localparam int PENDING_COUNT_WIDTH = 8;
@@ -131,6 +134,12 @@ module matrix_uart_controller #(
     logic [VALUE_FIFO_INDEX_WIDTH-1:0] value_fifo_head;
     logic [VALUE_FIFO_INDEX_WIDTH-1:0] value_fifo_tail;
     logic [VALUE_FIFO_COUNT_WIDTH-1:0] value_fifo_count;
+    logic signed [RESULT_WIDTH-1:0] result_fifo_data [0:RESULT_FIFO_DEPTH-1];
+    logic [7:0] result_fifo_row [0:RESULT_FIFO_DEPTH-1];
+    logic [7:0] result_fifo_col [0:RESULT_FIFO_DEPTH-1];
+    logic [RESULT_FIFO_INDEX_WIDTH-1:0] result_fifo_head;
+    logic [RESULT_FIFO_INDEX_WIDTH-1:0] result_fifo_tail;
+    logic [RESULT_FIFO_COUNT_WIDTH-1:0] result_fifo_count;
 
     logic [MATRIX_COUNT_WIDTH-1:0] rx_value_index;
     logic [7:0] rx_low_byte;
@@ -167,6 +176,8 @@ module matrix_uart_controller #(
 
     logic value_push_now;
     logic value_pop_now;
+    logic result_push_now;
+    logic result_pop_now;
     logic matrix_accept_now;
     logic result_done_now;
     logic matrix_ack_enqueue_now;
@@ -177,6 +188,8 @@ module matrix_uart_controller #(
     logic config_ack_dequeue_now;
 
     wire value_fifo_empty = (value_fifo_count == '0);
+    wire result_fifo_empty = (result_fifo_count == '0);
+    wire result_fifo_full = (result_fifo_count == RESULT_FIFO_COUNT_WIDTH'(RESULT_FIFO_DEPTH));
     wire accepted_slots_full = (accepted_matrix_count == FIFO_COUNT_WIDTH'(MATRIX_FIFO_DEPTH));
     wire [MATRIX_COUNT_WIDTH-1:0] active_matrix_last =
         (MATRIX_COUNT_WIDTH'(active_k) * MATRIX_COUNT_WIDTH'(active_n)) - MATRIX_COUNT_WIDTH'(1);
@@ -194,7 +207,7 @@ module matrix_uart_controller #(
 
     assign core_in_valid = !value_fifo_empty;
     assign core_in_data = value_fifo[value_fifo_head];
-    assign core_out_ready = (tx_state == TX_WAIT_RESULT) && !tx_busy;
+    assign core_out_ready = !result_fifo_full;
 
     assign tx_start =
         ((tx_state == TX_SEND_SINGLE) ||
@@ -256,6 +269,18 @@ module matrix_uart_controller #(
         end
     endfunction
 
+    function automatic logic [RESULT_FIFO_INDEX_WIDTH-1:0] result_fifo_next(
+        input logic [RESULT_FIFO_INDEX_WIDTH-1:0] index
+    );
+        begin
+            if (index == (RESULT_FIFO_DEPTH - 1)) begin
+                result_fifo_next = '0;
+            end else begin
+                result_fifo_next = index + RESULT_FIFO_INDEX_WIDTH'(1);
+            end
+        end
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             rx_state <= RX_WAIT_START;
@@ -263,6 +288,9 @@ module matrix_uart_controller #(
             value_fifo_head <= '0;
             value_fifo_tail <= '0;
             value_fifo_count <= '0;
+            result_fifo_head <= '0;
+            result_fifo_tail <= '0;
+            result_fifo_count <= '0;
             rx_value_index <= '0;
             rx_low_byte <= 8'h00;
             rx_drop_matrix <= 1'b0;
@@ -311,6 +339,8 @@ module matrix_uart_controller #(
         end else begin
             value_push_now = 1'b0;
             value_pop_now = core_in_valid && core_in_ready;
+            result_push_now = core_out_valid && core_out_ready;
+            result_pop_now = 1'b0;
             matrix_accept_now = 1'b0;
             result_done_now = 1'b0;
             matrix_ack_enqueue_now = 1'b0;
@@ -327,6 +357,13 @@ module matrix_uart_controller #(
 
             if (value_pop_now) begin
                 value_fifo_head <= value_fifo_next(value_fifo_head);
+            end
+
+            if (result_push_now) begin
+                result_fifo_data[result_fifo_tail] <= result_extended;
+                result_fifo_row[result_fifo_tail] <= core_out_row;
+                result_fifo_col[result_fifo_tail] <= core_out_col;
+                result_fifo_tail <= result_fifo_next(result_fifo_tail);
             end
 
             case (rx_state)
@@ -522,11 +559,12 @@ module matrix_uart_controller #(
                 end
 
                 TX_WAIT_RESULT: begin
-                    if (core_out_valid && core_out_ready) begin
-                        result_shift <= result_extended;
-                        result_row_reg <= core_out_row;
-                        result_col_reg <= core_out_col;
+                    if (!result_fifo_empty) begin
+                        result_shift <= result_fifo_data[result_fifo_head];
+                        result_row_reg <= result_fifo_row[result_fifo_head];
+                        result_col_reg <= result_fifo_col[result_fifo_head];
                         result_byte_index <= 4'd0;
+                        result_pop_now = 1'b1;
                         tx_state <= TX_SEND_RESULT_ROW;
                     end
                 end
@@ -569,10 +607,20 @@ module matrix_uart_controller #(
                 end
             endcase
 
+            if (result_pop_now) begin
+                result_fifo_head <= result_fifo_next(result_fifo_head);
+            end
+
             case ({value_push_now, value_pop_now})
                 2'b10: value_fifo_count <= value_fifo_count + VALUE_FIFO_COUNT_WIDTH'(1);
                 2'b01: value_fifo_count <= value_fifo_count - VALUE_FIFO_COUNT_WIDTH'(1);
                 default: value_fifo_count <= value_fifo_count;
+            endcase
+
+            case ({result_push_now, result_pop_now})
+                2'b10: result_fifo_count <= result_fifo_count + RESULT_FIFO_COUNT_WIDTH'(1);
+                2'b01: result_fifo_count <= result_fifo_count - RESULT_FIFO_COUNT_WIDTH'(1);
+                default: result_fifo_count <= result_fifo_count;
             endcase
 
             case ({matrix_accept_now, result_done_now})

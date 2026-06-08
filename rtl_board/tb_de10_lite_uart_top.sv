@@ -12,6 +12,7 @@ module tb_de10_lite_uart_top;
 
     logic [7:0] rx_byte;
     logic signed [63:0] result_word;
+    int max_result_fifo_count;
 
     de10_lite_uart_top #(
         .M_MAX(4),
@@ -173,6 +174,7 @@ module tb_de10_lite_uart_top;
         clk = 1'b0;
         key = 2'b00;
         uart_rx = 1'b1;
+        max_result_fifo_count = 0;
 
         repeat (5) @(posedge clk);
         key = 2'b11;
@@ -207,8 +209,18 @@ module tb_de10_lite_uart_top;
             end
         join
 
+        if (max_result_fifo_count <= 1) begin
+            $error("expected controller result FIFO to buffer ahead of UART, max depth=%0d", max_result_fifo_count);
+        end
+
         $display("PASS: DE10-Lite UART top streams immediate tagged MxN results");
         $finish;
+    end
+
+    always @(posedge clk) begin
+        if (dut.controller_inst.result_fifo_count > max_result_fifo_count) begin
+            max_result_fifo_count <= dut.controller_inst.result_fifo_count;
+        end
     end
 
 endmodule

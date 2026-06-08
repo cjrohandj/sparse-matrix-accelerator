@@ -79,6 +79,11 @@ core's `in_ready` signal is high. Runtime sparse weight config packets are only
 accepted while the waiting room and result path are idle, so all queued dense
 matrices use the currently configured K and weights.
 
+Core outputs are buffered by a separate result FIFO in
+`matrix_uart_controller.sv`, so the math core can hand off tagged results as
+soon as queue space is available while `uart_tx` drains those entries in the
+background.
+
 The core accumulates one dense B column at a time. After each complete K-value
 column arrives, it immediately emits that C column as tagged `(row, col, value)`
 entries. Host software reconstructs the normal row-major MxN result from those
