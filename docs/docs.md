@@ -10,8 +10,12 @@ rtl_board/uart_rx.sv
 rtl_board/uart_tx.sv
 rtl_sequential/sparse_matmul_4x4_streaming.sv
 ```
-
 Set `de10_lite_uart_top` as the top-level entity.
+
+On Quartus navigate to assignments, import assignments, select /quartus/de10_lite_uart_assignments.qsf 
+
+Compile and program onto board.  
+
 
 ## Board Wiring
 
@@ -24,3 +28,5 @@ USB-UART GND -> DE10-Lite GND
 ```
 
 Leave the adapter VCC unconnected. Power the DE10-Lite normally.
+
+

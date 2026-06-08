@@ -140,6 +140,8 @@ parameter int CLKS_PER_BIT = 434
 
 ## LED Status
 
+With `KEY[1]` released/high, LEDs show the normal live UART status:
+
 ```text
 LEDR[0]   reset released
 LEDR[1]   packet/controller busy
@@ -149,6 +151,16 @@ LEDR[4]   sparse core busy
 LEDR[8:5] controller state
 LEDR[9]   UART framing error pulse
 ```
+
+Hold `KEY[1]` low for the debug view:
+
+```text
+LEDR[7:0] last received UART byte
+LEDR[8]   latched core_config_valid pulse seen
+LEDR[9]   latched config_loaded_pulse seen
+```
+
+The two debug latch bits clear on reset (`KEY[0]`).
 
 ## Simulation
 

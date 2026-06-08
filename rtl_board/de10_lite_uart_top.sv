@@ -93,6 +93,9 @@ module de10_lite_uart_top #(
     logic config_loaded_pulse;
     logic result_sent_pulse;
     logic [3:0] controller_state;
+    logic [7:0] debug_last_rx_byte;
+    logic debug_config_loaded_latched;
+    logic debug_core_config_latched;
 
     assign clk = MAX10_CLK1_50;
 
@@ -105,6 +108,26 @@ module de10_lite_uart_top #(
     end
 
     assign rst_n = reset_sync[1];
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            debug_last_rx_byte <= 8'h00;
+            debug_config_loaded_latched <= 1'b0;
+            debug_core_config_latched <= 1'b0;
+        end else begin
+            if (rx_data_valid) begin
+                debug_last_rx_byte <= rx_data;
+            end
+
+            if (config_loaded_pulse) begin
+                debug_config_loaded_latched <= 1'b1;
+            end
+
+            if (core_config_valid) begin
+                debug_core_config_latched <= 1'b1;
+            end
+        end
+    end
 
     uart_rx #(
         .CLKS_PER_BIT(CLKS_PER_BIT)
@@ -220,12 +243,21 @@ module de10_lite_uart_top #(
         .busy(core_busy)
     );
 
-    assign LEDR[0] = rst_n;
-    assign LEDR[1] = controller_busy;
-    assign LEDR[2] = rx_data_valid;
-    assign LEDR[3] = tx_busy;
-    assign LEDR[4] = core_busy;
-    assign LEDR[8:5] = controller_state;
-    assign LEDR[9] = rx_framing_error;
+    assign LEDR =
+        !KEY[1] ?
+            {
+                debug_config_loaded_latched,
+                debug_core_config_latched,
+                debug_last_rx_byte
+            } :
+            {
+                rx_framing_error,
+                controller_state,
+                core_busy,
+                tx_busy,
+                rx_data_valid,
+                controller_busy,
+                rst_n
+            };
 
 endmodule
