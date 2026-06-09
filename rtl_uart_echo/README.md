@@ -1,7 +1,9 @@
 # DE10-Lite UART Echo Test
 
-This folder contains a minimal UART echo design for the DE10-Lite. Any byte
-received on `uart_rx` is sent straight back out on `uart_tx`.
+This folder contains two minimal UART test designs for the DE10-Lite:
+
+- `de10_lite_uart_echo_top`: any received byte is echoed back
+- `de10_lite_uart_tx_forever_top`: continuously transmits `0x55` (`'U'`)
 
 Use it to answer a very focused question:
 
@@ -13,12 +15,17 @@ Does the USB-UART bridge + FPGA pin assignment + board wiring work at all?
 
 ```text
 rtl_uart_echo/de10_lite_uart_echo_top.sv
+rtl_uart_echo/de10_lite_uart_tx_forever_top.sv
 rtl_uart_echo/uart_rx.sv
 rtl_uart_echo/uart_tx.sv
 rtl_uart_echo/tb_de10_lite_uart_echo_top.sv
+rtl_uart_echo/tb_de10_lite_uart_tx_forever_top.sv
 ```
 
-Set `de10_lite_uart_echo_top` as the Quartus top-level entity for this test.
+Set one of these as the Quartus top-level entity, depending on the test:
+
+- `de10_lite_uart_echo_top`
+- `de10_lite_uart_tx_forever_top`
 
 ## Board Wiring
 
@@ -72,6 +79,17 @@ iverilog -g2012 -Wall -o /private/tmp/uart_echo_tb.vvp \
 vvp /private/tmp/uart_echo_tb.vvp
 ```
 
+TX-only simulation:
+
+```sh
+iverilog -g2012 -Wall -o /private/tmp/uart_tx_forever_tb.vvp \
+  rtl_uart_echo/tb_de10_lite_uart_tx_forever_top.sv \
+  rtl_uart_echo/de10_lite_uart_tx_forever_top.sv \
+  rtl_uart_echo/uart_tx.sv
+
+vvp /private/tmp/uart_tx_forever_tb.vvp
+```
+
 ## Windows Loopback Check
 
 After programming the FPGA, you can test from PowerShell:
@@ -85,3 +103,23 @@ Expected output:
 ```text
 b'ABC'
 ```
+
+## TX-Only Receive Test
+
+After programming `de10_lite_uart_tx_forever_top`, the FPGA continuously sends
+`0x55`, which appears as `'U'` on a serial terminal.
+
+Mac / Linux:
+
+```sh
+python3 -c "import serial; s=serial.Serial('/dev/ttyUSB0',115200,timeout=2); print(s.read(32)); s.close()"
+```
+
+Windows:
+
+```powershell
+python -c "import serial; s=serial.Serial('COM4',115200,timeout=2); print(s.read(32)); s.close()"
+```
+
+If the PC-side receive path is working, you should see repeated `U` bytes such
+as `b'UUUUUUUU...'`.
